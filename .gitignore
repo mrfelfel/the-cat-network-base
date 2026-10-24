@@ -1,0 +1,14 @@
+# Private signing keys — never commit.
+signing-*.key
+*.pem
+
+# Build output
+/bin/
+*.aar
+*.so
+*.jar
+
+# Go
+*.test
+*.out
+coverage.*
