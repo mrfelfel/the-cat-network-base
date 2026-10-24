@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,6 +62,9 @@ type Resolver struct {
 	// forceRefresh makes Resolve skip the cache fast-path. Set by Refresher.
 	forceRefresh bool
 	mu           sync.Mutex
+	// upgradeRunning guards the single background resolve that follows a
+	// bootstrap win.
+	upgradeRunning atomic.Bool
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -321,9 +325,31 @@ func (r *Resolver) Resolve(ctx context.Context) (*Result, error) {
 		res.Attempts = append(res.Attempts, Attempt{Layer: 0, Source: "probe", Err: errors.New("no seed reachable")})
 	}
 
-	// Layers 1..N, strictly in order: the first that verifies wins.
+	// Layers 1..N, strictly in order: the first that verifies wins. Layer 4 is
+	// the signed bootstrap: it yields addresses, not a document, so it is
+	// handled separately from the document layers around it.
 	for i, layer := range r.layers {
 		n := i + 1
+		if bs, ok := layer.(DNSTXTSource); ok {
+			srvs, err := bs.Lookup(ctx)
+			if err != nil {
+				res.Attempts = append(res.Attempts, Attempt{Layer: n, Source: bs.Name(), Err: err})
+				continue
+			}
+			res.Attempts = append(res.Attempts, Attempt{Layer: n, Source: bs.Name()})
+			res.Servers = srvs
+			res.Addrs = make([]string, len(srvs))
+			for j, sv := range srvs {
+				res.Addrs[j] = sv.Addr()
+			}
+			res.Source = bs.Name()
+			res.Layer = n
+			res.Cached = false
+			// The bootstrap has no registry by design; chase the full document
+			// in the background so the next resolve is complete.
+			r.startUpgrade()
+			return res, nil
+		}
 		raw, err := layer.Fetch(ctx)
 		if err != nil {
 			res.Attempts = append(res.Attempts, Attempt{Layer: n, Source: layer.Name(), Err: err})

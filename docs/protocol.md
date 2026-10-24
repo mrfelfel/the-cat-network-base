@@ -102,7 +102,7 @@ from the network instead of carrying stale constants in the binary.
 | `github_ips` | layer 1 | literal addresses for `raw.githubusercontent.com` |
 | `mirrors` | layer 1 | `ip` + `host` (+ optional `path`, `plain_http`) |
 | `resolvers` | layers 2–3 | `ip` (UDP), `dot:ip`, `doh:https://ip/query` |
-| `server_name` | layer 4 | TXT record carrying the signed document |
+| `server_name` | layer 4 | TXT record carrying the signed bootstrap |
 | `apps_script` | layer 5 | relay deployment URL |
 
 Rules the library enforces after decryption **and** signature verification:
@@ -113,37 +113,50 @@ Rules the library enforces after decryption **and** signature verification:
   `weight` is `0..100`, descending order preferred
 - at least one server present
 
-### Layer 4 — the signed document over DNS
+### Layer 4 — signed bootstrap in one TXT record
 
-The TXT record at `server_name` carries the **same signed, encrypted document**
-the HTTPS layers serve, base64-encoded. It is not a plain address list: an
-unsigned `ip:port` record is the one place a poisoned DNS could redirect the
-client, which is exactly what the rest of this design exists to prevent. With
-the document, a tampered DNS can withhold the answer but cannot substitute
-addresses.
+Layer 4 answers one question: *which address do I connect to first?* It is not
+the full document. The registry (mirrors, resolvers, relay URL) does not fit
+in a 255-byte DNS string, and it is not needed to connect — only to find the
+*next* revision. So the record carries addresses, the client connects, and the
+full document is fetched from the other layers once there is a connection.
+
+The record is encrypted and signed in the **CNB2** format:
+
+```
+"CNB2" | kid(2) | nonce(12) | ciphertext | sig(64)
+```
+
+The signature is Ed25519 over the first three fields, with the same descriptor
+and keypair as the full document. A poisoned DNS can withhold the record but
+cannot substitute an address — which is why this is signed at all. A plain
+`ip:port` record would be exactly the hole the rest of the design closes.
+
+Inside the ciphertext the payload is minimal: `{"a":"62.220.127.238:30001"}`,
+with addresses comma-separated. No tags, no weights, no registry. One address
+costs 168 base64 characters, each additional one about 24.
 
 Publishing:
 
 ```bash
-catnetctl publish -key signing-4.key -in servers.plain.json
-catnetctl txt -record _gameserver.bizibazi.ir servers.json
+catnetctl txt -key signing-4.key -kid 4 -record _gameserver.bizibazi.ir \
+    -in servers.plain.json
 ```
-
-The output is one quoted TXT string per 255 bytes (RFC 1035 limit), for the
-same record name — paste them as multiple values of that record:
 
 ```text
-_gameserver.bizibazi.ir.  300  IN  TXT  "ewogICJ2IjogMSwKICAia2lkIjogNCw..."
-_gameserver.bizibazi.ir.  300  IN  TXT  "YRTlsSmdldFpBM1YvUVhXUEhGU2xa..."
+_gameserver.bizibazi.ir.  300  IN  TXT  "Q05CMgAEKQ64yfGYZkMMvL6gSEznYX0c..."
 ```
 
-The client concatenates the strings in order and base64-decodes the result.
-Standard, raw and URL-safe base64 are all accepted. Without `catnetctl`, the
-equivalent is `base64 -w0 servers.json` split into 255-character pieces.
+Keep the TTL short (300 or less). A record that fails verification counts as a
+failed layer.
 
-Keep the TTL short (300 or less): a rotated address is invisible to clients
-until the old record expires. A record holding a document that fails
-verification counts as a failed layer and the client falls through.
+### Finalising after a bootstrap win
+
+When layer 4 is what answered, the client has addresses but no registry. It
+immediately schedules one background full resolve, which walks layers 1–3 and
+5 to fetch the signed document. That resolve learns the registry and fills the
+cache, so every later resolution is complete. The bootstrap result is returned
+straight away and is never blocked on this upgrade.
 
 ### Learning and persistence
 
@@ -178,7 +191,7 @@ result.
 | 1 | **internal mirrors** — Liara packages, operator mirror, same static-IP trick | no DNS | GitHub blocked, mirror reachable |
 | 2 | **encrypted DNS** — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` reachable | static IPs stale, encrypted DNS works |
 | 3 | **plain UDP DNS** — carrier or national resolver | port 53 to any resolver | DoT/DoH blocked, UDP still answers |
-| 4 | **DNS TXT** — `server_name` carries the signed document, base64 and chunked | DNS only | HTTPS filtered |
+| 4 | **DNS TXT** — signed bootstrap: addresses only, one record | DNS only | HTTPS filtered |
 | 5 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
 
 Between the cache check and layer 0 there is no gap: a fresh cached document

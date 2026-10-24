@@ -74,24 +74,22 @@ func (m HTTPMirror) Fetch(ctx context.Context) ([]byte, error) {
 	return body, nil
 }
 
-// DNSTXTSource carries the signed document in a TXT record.
+// DNSTXTSource is layer 4: a signed, compact address list in one TXT record.
 //
-// The record holds the same signature-checked servers.json that the HTTPS
-// layers serve, base64-encoded and split across <=255-byte chunks (one per
-// quoted TXT string; the resolver concatenates them in order). Because the
-// signature lives inside the payload, a poisoned DNS can withhold the document
-// but cannot substitute addresses — unlike a plain "ip:port" TXT record, which
-// would be exactly the place a middlebox could redirect the client.
+// It is a bootstrap, not the full document. Its job is to answer "which
+// address do I connect to first" in a single DNS query, when HTTPS is filtered
+// and even encrypted DNS is blocked. The registry (mirrors, resolvers, relay)
+// is not here — it is fetched from the other layers once the client is
+// connected, at which point everything is finalised.
 //
-// This is the path for "HTTPS filtered, DNS still works": it costs one or two
-// DNS queries and nothing else.
+// The record is encrypted and Ed25519-signed in the CNB2 format, so a poisoned
+// DNS can withhold the answer but cannot substitute an address.
 type DNSTXTSource struct {
 	// Record is the TXT record name, e.g. "_gameserver.bizibazi.ir".
 	Record string
 	// Server is an optional resolver "ip:port"; empty uses the system one.
 	Server string
-	// Timeout bounds the lookup. Default 900ms — a 1 KiB TXT record is a few
-	// round trips on a slow mobile link.
+	// Timeout bounds the lookup. Default 700ms — the record is one string.
 	Timeout time.Duration
 }
 
@@ -102,10 +100,11 @@ func (d DNSTXTSource) Name() string {
 	return "dns-txt:" + d.Record
 }
 
-func (d DNSTXTSource) Fetch(ctx context.Context) ([]byte, error) {
+// Lookup returns the signed bootstrap addresses.
+func (d DNSTXTSource) Lookup(ctx context.Context) ([]Server, error) {
 	timeout := d.Timeout
 	if timeout <= 0 {
-		timeout = 900 * time.Millisecond
+		timeout = 700 * time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -125,19 +124,13 @@ func (d DNSTXTSource) Fetch(ctx context.Context) ([]byte, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("%s: no TXT records", d.Name())
 	}
+	// One record is the normal case; joining also tolerates a provider that
+	// split the value.
+	return ParseBootstrap(strings.Join(records, ""), Descriptor(), Keys)
+}
 
-	// Preferred form: base64 chunks. The alternatives exist so a record that
-	// was written by hand (or by a provider that re-encodes it) still works:
-	// a full JSON document stored directly in one record, or base64 with
-	// whitespace inserted by the resolver.
-	joined := strings.Join(records, "")
-	if doc, err := decodeTXTDocument(joined); err == nil {
-		return doc, nil
-	}
-	if strings.HasPrefix(strings.TrimSpace(joined), "{") {
-		return []byte(joined), nil
-	}
-	return nil, fmt.Errorf("%s: TXT record is not a catnet document", d.Name())
+func (d DNSTXTSource) Fetch(context.Context) ([]byte, error) {
+	return nil, fmt.Errorf("%s: bootstrap carries addresses, not a document", d.Name())
 }
 
 // decodeTXTDocument tries the base64 encodings a TXT record may use: standard,

@@ -240,27 +240,47 @@ func goByteList(b []byte) string {
 	return s
 }
 
-// cmdTXT prints the TXT record lines for a published document. Providers often
-// cap a record at 255 characters per quoted string; the output uses one string
-// per chunk, which every common DNS provider accepts (paste them as multiple
-// values of the same TXT record).
+// cmdTXT prints the layer-4 TXT record: a signed, compact address list that
+// fits in one DNS string. It carries addresses only; the full document with the
+// registry is fetched from the other layers after the client connects.
 func cmdTXT(args []string) error {
 	fs := flag.NewFlagSet("txt", flag.ExitOnError)
 	record := fs.String("record", "", "record name to print in the output")
+	keyPath := fs.String("key", "", "PEM private key (required)")
+	kid := fs.Uint("kid", uint(catnet.KeyID), "signing key id")
+	in := fs.String("in", "servers.plain.json", "plaintext payload JSON")
 	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
-		return errors.New("txt: exactly one file required")
-	}
-	raw, err := os.ReadFile(fs.Arg(0))
+
+	priv, err := loadPrivateKey(*keyPath)
 	if err != nil {
 		return err
 	}
-	// Verify before publishing: a record carrying a document that does not
-	// open is worse than no record at all.
-	if _, err := catnet.ParseEnvelope(raw, catnet.Descriptor(), catnet.Keys); err != nil {
-		return fmt.Errorf("txt: refusing to publish an invalid document: %w", err)
+	raw, err := os.ReadFile(*in)
+	if err != nil {
+		return err
 	}
-	enc := base64.StdEncoding.EncodeToString(raw)
+	var payload catnet.Payload
+	if err := strictUnmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("txt: %s: %w", *in, err)
+	}
+	if *kid > 65535 {
+		return errors.New("txt: -kid must be 0..65535")
+	}
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	desc := catnet.Descriptor()
+	defer func() {
+		for i := range desc {
+			desc[i] = 0
+		}
+	}()
+	val, err := catnet.SealBootstrap(payload.Sorted(), nonce, desc, uint16(*kid), priv)
+	if err != nil {
+		return err
+	}
+
 	name := *record
 	if name == "" {
 		name = "_gameserver"
@@ -268,14 +288,19 @@ func cmdTXT(args []string) error {
 	if !strings.HasSuffix(name, ".") {
 		name += "."
 	}
-	fmt.Printf("; %d bytes -> %d chars of base64, %d chunks\n", len(raw), len(enc), (len(enc)+254)/255)
-	for i := 0; i < len(enc); i += 255 {
-		end := i + 255
-		if end > len(enc) {
-			end = len(enc)
-		}
-		fmt.Printf("%s\t300\tIN\tTXT\t\"%s\"\n", name, enc[i:end])
+	fmt.Printf("; %d chars of base64 (limit 255 per TXT string)\n", len(val))
+	if len(val) <= 255 {
+		fmt.Printf("%s\t300\tIN\tTXT\t\"%s\"\n", name, val)
+		return nil
 	}
-	fmt.Printf("\n; single-line form (if your provider accepts one long value):\n%s\t300\tIN\tTXT\t\"%s\"\n", name, enc)
+	// Should not happen with a normal address list, but split rather than emit
+	// a record the provider will truncate.
+	for i := 0; i < len(val); i += 255 {
+		end := i + 255
+		if end > len(val) {
+			end = len(val)
+		}
+		fmt.Printf("%s\t300\tIN\tTXT\t\"%s\"\n", name, val[i:end])
+	}
 	return nil
 }

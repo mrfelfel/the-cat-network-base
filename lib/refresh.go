@@ -55,3 +55,22 @@ func (r *Resolver) refresh(ctx context.Context) (*Result, error) {
 	}()
 	return r.Resolve(ctx)
 }
+
+// startUpgrade schedules one background full resolve after a bootstrap win.
+//
+// The bootstrap answer is addresses only, by design: the registry does not fit
+// in a TXT record. This fetches the full document so every layer's inputs are
+// learned and the next resolve is complete. It runs at most once at a time and
+// never blocks the caller; a failure is silent because the caller already has a
+// working address.
+func (r *Resolver) startUpgrade() {
+	if !r.upgradeRunning.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer r.upgradeRunning.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		_, _ = r.refresh(ctx)
+	}()
+}

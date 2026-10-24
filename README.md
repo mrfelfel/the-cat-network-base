@@ -81,7 +81,7 @@ Each layer is tried only if every earlier one failed:
 | 1 | static IP — GitHub raw at literal IPs, then internal mirrors | no DNS |
 | 2 | encrypted DNS — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` |
 | 3 | plain UDP DNS — carrier or national resolver | port 53 |
-| 4 | DNS TXT — `server_name` carries the signed document | DNS |
+| 4 | DNS TXT — signed bootstrap: addresses only, one record | DNS |
 | 5 | Apps Script relay | Google reachable |
 
 A fresh cached document returns before any of this runs; an expired one is
