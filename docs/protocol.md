@@ -88,7 +88,7 @@ store / CI secret).
     {"ip": "94.182.50.10", "host": "package-mirror.liara.ir", "path": "/catnet/servers.json"}
   ],
   "resolvers": ["dot:8.8.8.8", "doh:https://1.1.1.1/dns-query", "10.202.10.202"],
-  "dns_txt": "_catnet.cr0.ir",
+  "server_name": "_gameserver.bizibazi.ir",
   "apps_script": "https://script.google.com/macros/s/<id>/exec"
 }
 ```
@@ -102,7 +102,7 @@ from the network instead of carrying stale constants in the binary.
 | `github_ips` | layer 1 | literal addresses for `raw.githubusercontent.com` |
 | `mirrors` | layer 1 | `ip` + `host` (+ optional `path`, `plain_http`) |
 | `resolvers` | layers 2–3 | `ip` (UDP), `dot:ip`, `doh:https://ip/query` |
-| `dns_txt` | layer 4 | TXT record name |
+| `server_name` | layer 4 | TXT record that lists addresses (not a document) |
 | `apps_script` | layer 5 | relay deployment URL |
 
 Rules the library enforces after decryption **and** signature verification:
@@ -112,6 +112,28 @@ Rules the library enforces after decryption **and** signature verification:
 - `host` is a dotted-quad IP or a bare DNS name; `port` is `1..65535`;
   `weight` is `0..100`, descending order preferred
 - at least one server present
+
+### Layer 4 — addresses straight from DNS
+
+This layer is different from every other one: it fetches no document. The TXT
+record at `server_name` contains `host:port` entries, so the answer arrives in
+a single DNS query with no TLS and no GitHub. It is the cheapest working path
+when HTTPS is filtered but DNS is not.
+
+Because there is no document, there is no signature. The record is trusted by
+ownership of the name: you publish it, so a wrong answer means either you
+published it or the DNS is compromised. The result is marked
+`TrustedByDNS` and used only when no signed document was available.
+
+Record format — one address, or several separated by commas or spaces:
+
+```text
+_gameserver.bizibazi.ir.  300  IN  TXT  "62.220.127.238:30001"
+_gameserver.bizibazi.ir.  300  IN  TXT  "62.220.127.238:30001,203.0.113.7:30001"
+```
+
+Every entry must be an IP literal and a valid port; anything else is skipped.
+A record with no usable entry counts as a failed layer.
 
 ### Learning and persistence
 
@@ -146,7 +168,7 @@ result.
 | 1 | **internal mirrors** — Liara packages, operator mirror, same static-IP trick | no DNS | GitHub blocked, mirror reachable |
 | 2 | **encrypted DNS** — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` reachable | static IPs stale, encrypted DNS works |
 | 3 | **plain UDP DNS** — carrier or national resolver | port 53 to any resolver | DoT/DoH blocked, UDP still answers |
-| 4 | **DNS TXT** — `_catnet.<domain>` | DNS only | HTTPS filtered |
+| 4 | **DNS TXT** — the record at `server_name` lists addresses directly | DNS only | HTTPS filtered |
 | 5 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
 
 Between the cache check and layer 0 there is no gap: a fresh cached document

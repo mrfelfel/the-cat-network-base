@@ -16,7 +16,7 @@ func registryPayload() Payload {
 	p.GitHubIPs = []string{"203.0.113.50"}
 	p.Mirrors = []MirrorHost{{IP: "203.0.113.51", Host: "mirror.example", Path: "/s.json"}}
 	p.Resolvers = []string{"10.202.10.202:53", "dot:1.1.1.1"}
-	p.DNSTXT = "_catnet.example"
+	p.ServerName = "_gameserver.bizibazi.ir"
 	p.AppsScript = "https://script.google.com/macros/s/x/exec"
 	return p
 }
@@ -49,7 +49,7 @@ func TestLearnPersistsAndRebuildsLayers(t *testing.T) {
 	if len(lr.GitHubIPs) != 1 || lr.GitHubIPs[0] != "203.0.113.50" {
 		t.Fatalf("learned github ips = %v", lr.GitHubIPs)
 	}
-	if lr.AppsScript == "" || lr.DNSTXT != "_catnet.example" {
+	if lr.AppsScript == "" || lr.ServerName != "_gameserver.bizibazi.ir" {
 		t.Fatalf("learned registry incomplete: %+v", lr)
 	}
 	if fi, err := os.Stat(regPath); err != nil || fi.Mode().Perm() != 0o600 {
@@ -65,7 +65,7 @@ func TestLearnPersistsAndRebuildsLayers(t *testing.T) {
 	if !strings.Contains(names, "static:203.0.113.51→mirror.example") {
 		t.Fatalf("learned mirror not used: %s", names)
 	}
-	if !strings.Contains(names, "dns:_catnet.example") {
+	if !strings.Contains(names, "names-txt:_gameserver.bizibazi.ir") {
 		t.Fatalf("learned TXT not used: %s", names)
 	}
 	if !strings.Contains(names, "apps-script:") {

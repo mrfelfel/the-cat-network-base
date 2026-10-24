@@ -22,7 +22,7 @@ type learnedRegistry struct {
 	GitHubIPs  []string     `json:"github_ips,omitempty"`
 	Mirrors    []MirrorHost `json:"mirrors,omitempty"`
 	Resolvers  []string     `json:"resolvers,omitempty"`
-	DNSTXT     string       `json:"dns_txt,omitempty"`
+	ServerName string       `json:"server_name,omitempty"`
 	AppsScript string       `json:"apps_script,omitempty"`
 }
 
@@ -43,7 +43,7 @@ func loadLearned(path string) *Payload {
 		GitHubIPs:  lr.GitHubIPs,
 		Mirrors:    lr.Mirrors,
 		Resolvers:  lr.Resolvers,
-		DNSTXT:     lr.DNSTXT,
+		ServerName: lr.ServerName,
 		AppsScript: lr.AppsScript,
 	}
 }
@@ -60,7 +60,7 @@ func storeLearned(path string, p Payload) {
 		GitHubIPs:  p.GitHubIPs,
 		Mirrors:    p.Mirrors,
 		Resolvers:  p.Resolvers,
-		DNSTXT:     p.DNSTXT,
+		ServerName: p.ServerName,
 		AppsScript: p.AppsScript,
 	}, "", "  ")
 	if err != nil {

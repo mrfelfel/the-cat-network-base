@@ -244,9 +244,9 @@ func TestHTTPMirrorFetchesAndRejectsStatus(t *testing.T) {
 
 func TestBuildSourceOrder(t *testing.T) {
 	r := Build(Options{
-		Repo:    "o/r",
-		DNSName: "_catnet.example",
-		Seeds:   []SeedSource{{Host: "1.2.3.4", Port: 30001}},
+		Repo:       "o/r",
+		ServerName: "_gameserver.bizibazi.ir",
+		Seeds:      []SeedSource{{Host: "1.2.3.4", Port: 30001}},
 	})
 	got := r.Sources()
 	want := []string{
@@ -256,7 +256,7 @@ func TestBuildSourceOrder(t *testing.T) {
 		"static:185.199.111.133→raw.githubusercontent.com",
 		"dns",
 		"udp-dns",
-		"dns:_catnet.example",
+		"names-txt:_gameserver.bizibazi.ir",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("sources = %v", got)

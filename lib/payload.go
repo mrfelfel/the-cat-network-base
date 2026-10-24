@@ -36,8 +36,9 @@ type Payload struct {
 	// Resolvers are DNS resolvers in the layer syntax: "ip:53",
 	// "dot:ip[:port]", "doh:https://ip/query". Listed before the built-ins.
 	Resolvers []string `json:"resolvers,omitempty"`
-	// DNSTXT is the TXT record that carries the document.
-	DNSTXT string `json:"dns_txt,omitempty"`
+	// ServerName is the DNS name whose TXT record holds the address(es).
+	// Layer 4 reads it; it does NOT carry the document, only addresses.
+	ServerName string `json:"server_name,omitempty"`
 	// AppsScript is the last-resort relay URL.
 	AppsScript string `json:"apps_script,omitempty"`
 }

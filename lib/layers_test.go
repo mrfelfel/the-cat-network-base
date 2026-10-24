@@ -196,3 +196,33 @@ func TestBuildAQueryShape(t *testing.T) {
 }
 
 var _ = ed25519.PublicKey{}
+
+func TestSplitAddresses(t *testing.T) {
+	got := splitAddresses("62.220.127.238:30001, 203.0.113.7:30001\n10.0.0.1:1")
+	want := []string{"62.220.127.238:30001", "203.0.113.7:30001", "10.0.0.1:1"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestNamesTXTSkipsNonAddresses(t *testing.T) {
+	// A record that also carries a non-address token must not fail the layer;
+	// only the valid entry is used.
+	rec := "v=spf1 -all 62.220.127.238:30001 example.com:80"
+	var out []Server
+	for _, tok := range splitAddresses(rec) {
+		host, port, err := splitHostPort(tok)
+		if err != nil || net.ParseIP(host) == nil {
+			continue
+		}
+		out = append(out, Server{Host: host, Port: port})
+	}
+	if len(out) != 1 || out[0].Addr() != "62.220.127.238:30001" {
+		t.Fatalf("out = %+v", out)
+	}
+}
