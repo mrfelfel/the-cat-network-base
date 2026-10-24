@@ -106,6 +106,7 @@ func encode(res *catnet.Result) string {
 		"servers": srvs,
 		"source":  res.Source,
 		"stale":   res.Stale,
+		"layer":   res.Layer,
 		"cached":  res.Cached,
 		"expires": res.ExpiresAt.UTC().Format(time.RFC3339),
 	})

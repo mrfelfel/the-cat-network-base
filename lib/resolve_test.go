@@ -37,7 +37,7 @@ func (f *fakeSource) Fetch(ctx context.Context) ([]byte, error) {
 func resolverWith(t *testing.T, srcs ...Source) (*Resolver, SigningKeys, ed25519.PrivateKey) {
 	t.Helper()
 	keys, priv := testKeys(t)
-	return &Resolver{sources: srcs, cache: newCache("")}, keys, priv
+	return &Resolver{layers: srcs, cache: newCache("")}, keys, priv
 }
 
 func TestResolveFirstValidSourceWins(t *testing.T) {
@@ -48,7 +48,7 @@ func TestResolveFirstValidSourceWins(t *testing.T) {
 	// the test key set for the duration of this test.
 	restore := swapKeys(t, 7, priv.Public().(ed25519.PublicKey))
 
-	r.sources = []Source{
+	r.layers = []Source{
 		&fakeSource{name: "broken-html", raw: []byte("<html>")},
 		&fakeSource{name: "blocked", err: errors.New("connection reset")},
 		&fakeSource{name: "good", raw: good},
@@ -85,25 +85,24 @@ func swapKeys(t *testing.T, kid uint16, pub ed25519.PublicKey) func() {
 	return func() { Keys = old }
 }
 
-func TestResolveCancelsSlowSources(t *testing.T) {
+func TestResolveStopsAtFirstWorkingLayer(t *testing.T) {
 	priv := mustPriv(t)
 	good := seal(t, samplePayload(), nil, priv, 7)
 	restore := swapKeys(t, 7, priv.Public().(ed25519.PublicKey))
 	defer restore()
 
-	slow := &fakeSource{name: "slow", block: true}
-	fast := &fakeSource{name: "fast", raw: good}
-	r := &Resolver{sources: []Source{slow, fast}, cache: newCache("")}
-	start := time.Now()
+	first := &fakeSource{name: "L1", raw: good}
+	second := &fakeSource{name: "L2", raw: good}
+	r := &Resolver{layers: []Source{first, second}, cache: newCache("")}
 	res, err := r.Resolve(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Source != "fast" {
-		t.Fatalf("source = %q", res.Source)
+	if res.Source != "L1" || res.Layer != 1 {
+		t.Fatalf("source=%q layer=%d", res.Source, res.Layer)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("resolution waited for the slow source: %v", elapsed)
+	if second.calls.Load() != 0 {
+		t.Fatal("a later layer was tried after an earlier one succeeded")
 	}
 }
 
@@ -111,7 +110,7 @@ func TestResolveAllFailNoCache(t *testing.T) {
 	priv := mustPriv(t)
 	restore := swapKeys(t, 7, priv.Public().(ed25519.PublicKey))
 	defer restore()
-	r := &Resolver{sources: []Source{
+	r := &Resolver{layers: []Source{
 		&fakeSource{name: "a", err: errors.New("dial tcp: timeout")},
 		&fakeSource{name: "b", raw: []byte("{}")},
 	}, cache: newCache("")}
@@ -135,7 +134,7 @@ func TestResolveFallsBackToExpiredCache(t *testing.T) {
 	c := newCache(path)
 	c.store(doc)
 
-	r := &Resolver{sources: []Source{&fakeSource{name: "down", err: errors.New("offline")}}, cache: c}
+	r := &Resolver{layers: []Source{&fakeSource{name: "down", err: errors.New("offline")}}, cache: c}
 	res, err := r.Resolve(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +162,7 @@ func TestResolvePrefersNetworkOverExpiredCache(t *testing.T) {
 	fresh.Servers = []Server{{Host: "10.9.9.9", Port: 1}}
 	freshDoc := seal(t, fresh, nil, priv, 7)
 
-	r := &Resolver{sources: []Source{&fakeSource{name: "live", raw: freshDoc}}, cache: c}
+	r := &Resolver{layers: []Source{&fakeSource{name: "live", raw: freshDoc}}, cache: c}
 	res, err := r.Resolve(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +186,7 @@ func TestResolveCorruptCacheIsDiscarded(t *testing.T) {
 		t.Fatal(err)
 	}
 	good := seal(t, samplePayload(), nil, priv, 7)
-	r := &Resolver{sources: []Source{&fakeSource{name: "live", raw: good}}, cache: newCache(path)}
+	r := &Resolver{layers: []Source{&fakeSource{name: "live", raw: good}}, cache: newCache(path)}
 	if _, err := r.Resolve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +200,7 @@ func TestResolveDoesNotPoisonCacheFromFailedSource(t *testing.T) {
 	restore := swapKeys(t, 7, priv.Public().(ed25519.PublicKey))
 	defer restore()
 	path := filepath.Join(t.TempDir(), "servers.json")
-	r := &Resolver{sources: []Source{&fakeSource{name: "evil", raw: []byte(`{"v":1}`)}}, cache: newCache(path)}
+	r := &Resolver{layers: []Source{&fakeSource{name: "evil", raw: []byte(`{"v":1}`)}}, cache: newCache(path)}
 	if _, err := r.Resolve(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
@@ -228,7 +227,7 @@ func TestHTTPMirrorFetchesAndRejectsStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := &Resolver{sources: []Source{HTTPMirror{URL: srv.URL + "/servers.json", CacheBust: true}}, cache: newCache("")}
+	r := &Resolver{layers: []Source{HTTPMirror{URL: srv.URL + "/servers.json", CacheBust: true}}, cache: newCache("")}
 	res, err := r.Resolve(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +236,7 @@ func TestHTTPMirrorFetchesAndRejectsStatus(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 
-	r2 := &Resolver{sources: []Source{HTTPMirror{URL: srv.URL + "/missing.json"}}, cache: newCache("")}
+	r2 := &Resolver{layers: []Source{HTTPMirror{URL: srv.URL + "/missing.json"}}, cache: newCache("")}
 	if _, err := r2.Resolve(context.Background()); err == nil {
 		t.Fatal("expected 404 to fail")
 	}
@@ -251,13 +250,12 @@ func TestBuildSourceOrder(t *testing.T) {
 	})
 	got := r.Sources()
 	want := []string{
-		"http:raw.githubusercontent.com",
-		"http:scorpian.ir",
-		"http:cdn.jsdelivr.net",
-		"http:ghproxy.net",
-		"http:raw.githack.com",
+		"static:185.199.108.133→raw.githubusercontent.com",
+		"static:185.199.109.133→raw.githubusercontent.com",
+		"static:185.199.110.133→raw.githubusercontent.com",
+		"static:185.199.111.133→raw.githubusercontent.com",
+		"dns",
 		"dns:_catnet.example",
-		"seed:1.2.3.4",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("sources = %v", got)

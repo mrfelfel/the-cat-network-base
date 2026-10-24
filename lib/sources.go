@@ -176,3 +176,19 @@ func hostOf(url string) string {
 	}
 	return url
 }
+
+// readLimited reads a response body with the envelope size cap, so a hostile or
+// broken endpoint cannot make the client allocate unbounded memory.
+func readLimited(resp *http.Response, name string) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxEnvelope+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxEnvelope {
+		return nil, fmt.Errorf("%s: response too large", name)
+	}
+	return body, nil
+}
+
+// Addr is the seed's host:port dial string.
+func (s SeedSource) Addr() string { return net.JoinHostPort(s.Host, fmt.Sprint(s.Port)) }

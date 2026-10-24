@@ -20,6 +20,7 @@ type resolverFlags struct {
 	seeds   *string
 	dns     *string
 	mirrors *string
+	script  *string
 	cache   *string
 }
 
@@ -30,7 +31,8 @@ func bindResolverFlags(fs *flag.FlagSet) *resolverFlags {
 		file:    fs.String("file", "servers.json", "document path in the repo"),
 		seeds:   fs.String("seeds", "", "comma-separated ip:port seed addresses"),
 		dns:     fs.String("dns", "", "TXT record name, e.g. _catnet.catgram.ir"),
-		mirrors: fs.String("mirrors", "", "comma-separated extra mirror URLs"),
+		mirrors: fs.String("mirrors", "", "comma-separated mirror specs ip=host[:path][,http]"),
+		script:  fs.String("script", "", "Apps Script relay URL (last resort)"),
 		cache:   fs.String("cache", defaultCachePath(), "cache file (empty disables)"),
 	}
 }
@@ -40,14 +42,20 @@ func buildResolver(fs *flag.FlagSet, r *resolverFlags) *catnet.Resolver {
 		r = bindResolverFlags(fs)
 	}
 	opts := catnet.Options{
-		Repo:      *r.repo,
-		Branch:    *r.branch,
-		File:      *r.file,
-		DNSName:   *r.dns,
-		CachePath: *r.cache,
+		Repo:       *r.repo,
+		Branch:     *r.branch,
+		File:       *r.file,
+		DNSName:    *r.dns,
+		AppsScript: *r.script,
+		CachePath:  *r.cache,
 	}
-	for _, u := range splitComma(*r.mirrors) {
-		opts.Mirrors = append(opts.Mirrors, u)
+	for _, spec := range splitComma(*r.mirrors) {
+		m, err := parseMirror(spec)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "catnetctl: ignoring mirror %q: %v\n", spec, err)
+			continue
+		}
+		opts.Mirrors = append(opts.Mirrors, m)
 	}
 	for _, hp := range splitComma(*r.seeds) {
 		s, err := parseSeed(hp)
@@ -98,4 +106,25 @@ func strictUnmarshal(b []byte, v any) error {
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// parseMirror accepts "ip=host[:path][,http]". A plain "ip=host" means
+// "https://host<docPath>" where docPath is the repo document.
+func parseMirror(spec string) (catnet.MirrorHost, error) {
+	plain := false
+	if strings.HasSuffix(spec, ",http") {
+		plain = true
+		spec = strings.TrimSuffix(spec, ",http")
+	}
+	ip, rest, ok := strings.Cut(spec, "=")
+	if !ok || ip == "" || rest == "" {
+		return catnet.MirrorHost{}, fmt.Errorf("want ip=host[:path]")
+	}
+	m := catnet.MirrorHost{IP: ip, PlainHTTP: plain}
+	if h, path, ok := strings.Cut(rest, ":"); ok {
+		m.Host, m.Path = h, path
+	} else {
+		m.Host = rest
+	}
+	return m, nil
 }
