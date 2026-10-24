@@ -102,7 +102,7 @@ from the network instead of carrying stale constants in the binary.
 | `github_ips` | layer 1 | literal addresses for `raw.githubusercontent.com` |
 | `mirrors` | layer 1 | `ip` + `host` (+ optional `path`, `plain_http`) |
 | `resolvers` | layers 2–3 | `ip` (UDP), `dot:ip`, `doh:https://ip/query` |
-| `server_name` | layer 4 | TXT record that lists addresses (not a document) |
+| `server_name` | layer 4 | TXT record carrying the signed document |
 | `apps_script` | layer 5 | relay deployment URL |
 
 Rules the library enforces after decryption **and** signature verification:
@@ -113,27 +113,37 @@ Rules the library enforces after decryption **and** signature verification:
   `weight` is `0..100`, descending order preferred
 - at least one server present
 
-### Layer 4 — addresses straight from DNS
+### Layer 4 — the signed document over DNS
 
-This layer is different from every other one: it fetches no document. The TXT
-record at `server_name` contains `host:port` entries, so the answer arrives in
-a single DNS query with no TLS and no GitHub. It is the cheapest working path
-when HTTPS is filtered but DNS is not.
+The TXT record at `server_name` carries the **same signed, encrypted document**
+the HTTPS layers serve, base64-encoded. It is not a plain address list: an
+unsigned `ip:port` record is the one place a poisoned DNS could redirect the
+client, which is exactly what the rest of this design exists to prevent. With
+the document, a tampered DNS can withhold the answer but cannot substitute
+addresses.
 
-Because there is no document, there is no signature. The record is trusted by
-ownership of the name: you publish it, so a wrong answer means either you
-published it or the DNS is compromised. The result is marked
-`TrustedByDNS` and used only when no signed document was available.
+Publishing:
 
-Record format — one address, or several separated by commas or spaces:
-
-```text
-_gameserver.bizibazi.ir.  300  IN  TXT  "62.220.127.238:30001"
-_gameserver.bizibazi.ir.  300  IN  TXT  "62.220.127.238:30001,203.0.113.7:30001"
+```bash
+catnetctl publish -key signing-4.key -in servers.plain.json
+catnetctl txt -record _gameserver.bizibazi.ir servers.json
 ```
 
-Every entry must be an IP literal and a valid port; anything else is skipped.
-A record with no usable entry counts as a failed layer.
+The output is one quoted TXT string per 255 bytes (RFC 1035 limit), for the
+same record name — paste them as multiple values of that record:
+
+```text
+_gameserver.bizibazi.ir.  300  IN  TXT  "ewogICJ2IjogMSwKICAia2lkIjogNCw..."
+_gameserver.bizibazi.ir.  300  IN  TXT  "YRTlsSmdldFpBM1YvUVhXUEhGU2xa..."
+```
+
+The client concatenates the strings in order and base64-decodes the result.
+Standard, raw and URL-safe base64 are all accepted. Without `catnetctl`, the
+equivalent is `base64 -w0 servers.json` split into 255-character pieces.
+
+Keep the TTL short (300 or less): a rotated address is invisible to clients
+until the old record expires. A record holding a document that fails
+verification counts as a failed layer and the client falls through.
 
 ### Learning and persistence
 
@@ -168,7 +178,7 @@ result.
 | 1 | **internal mirrors** — Liara packages, operator mirror, same static-IP trick | no DNS | GitHub blocked, mirror reachable |
 | 2 | **encrypted DNS** — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` reachable | static IPs stale, encrypted DNS works |
 | 3 | **plain UDP DNS** — carrier or national resolver | port 53 to any resolver | DoT/DoH blocked, UDP still answers |
-| 4 | **DNS TXT** — the record at `server_name` lists addresses directly | DNS only | HTTPS filtered |
+| 4 | **DNS TXT** — `server_name` carries the signed document, base64 and chunked | DNS only | HTTPS filtered |
 | 5 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
 
 Between the cache check and layer 0 there is no gap: a fresh cached document

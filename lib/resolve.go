@@ -32,10 +32,6 @@ type Result struct {
 	Cached bool
 	// Stale is true when the payload's expires_at has passed.
 	Stale bool
-	// TrustedByDNS is true when the addresses came from the DNS TXT record
-	// rather than a signed document. They are unverified: the operator owns
-	// the name, but a compromised DNS could substitute addresses.
-	TrustedByDNS bool
 	// Attempts lists every layer tried, in order, with its outcome.
 	Attempts []Attempt
 }
@@ -91,8 +87,8 @@ type Options struct {
 	// UDPServers are plain-UDP DNS servers tried after the encrypted ones,
 	// e.g. national resolvers such as "10.202.10.202".
 	UDPServers []string
-	// ServerName is the DNS name whose TXT record holds the server
-	// address(es), e.g. "_gameserver.bizibazi.ir". Layer 4 reads it.
+	// ServerName is the DNS name whose TXT record carries the signed
+	// document, e.g. "_gameserver.bizibazi.ir". Layer 4 reads it.
 	ServerName string
 	// AppsScript is the last-resort relay URL.
 	AppsScript string
@@ -192,7 +188,7 @@ func buildLayers(o Options) []Source {
 
 	// Layer 4 — DNS TXT on our own domain.
 	if o.ServerName != "" {
-		layers = append(layers, NamesTXTResolver{Record: o.ServerName})
+		layers = append(layers, DNSTXTSource{Record: o.ServerName})
 	}
 
 	// Layer 5 — last resort: the Google Apps Script relay.
@@ -323,27 +319,6 @@ func (r *Resolver) Resolve(ctx context.Context) (*Result, error) {
 		}
 	} else {
 		res.Attempts = append(res.Attempts, Attempt{Layer: 0, Source: "probe", Err: errors.New("no seed reachable")})
-	}
-
-	// Layer 4 equivalent — a TXT record that carries addresses instead of a
-	// document. Checked in chain order, before the document layers that come
-	// after it, by placing it among them at construction; here we handle the
-	// case where it is the configured names source.
-	for _, l := range r.layers {
-		if nt, ok := l.(NamesTXTResolver); ok {
-			if srvs, err := nt.Lookup(ctx); err == nil && len(srvs) > 0 {
-				res.Servers = srvs
-				res.Addrs = make([]string, len(srvs))
-				for i, s := range srvs {
-					res.Addrs[i] = s.Addr()
-				}
-				res.Source = nt.Name()
-				res.Layer = 4
-				res.Cached = false
-				res.TrustedByDNS = true
-				return res, nil
-			}
-		}
 	}
 
 	// Layers 1..N, strictly in order: the first that verifies wins.

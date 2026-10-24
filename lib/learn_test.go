@@ -65,7 +65,7 @@ func TestLearnPersistsAndRebuildsLayers(t *testing.T) {
 	if !strings.Contains(names, "static:203.0.113.51→mirror.example") {
 		t.Fatalf("learned mirror not used: %s", names)
 	}
-	if !strings.Contains(names, "names-txt:_gameserver.bizibazi.ir") {
+	if !strings.Contains(names, "dns-txt:_gameserver.bizibazi.ir") {
 		t.Fatalf("learned TXT not used: %s", names)
 	}
 	if !strings.Contains(names, "apps-script:") {

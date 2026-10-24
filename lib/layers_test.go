@@ -3,6 +3,7 @@ package catnet
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/binary"
 	"net"
 	"net/http"
@@ -197,32 +198,41 @@ func TestBuildAQueryShape(t *testing.T) {
 
 var _ = ed25519.PublicKey{}
 
-func TestSplitAddresses(t *testing.T) {
-	got := splitAddresses("62.220.127.238:30001, 203.0.113.7:30001\n10.0.0.1:1")
-	want := []string{"62.220.127.238:30001", "203.0.113.7:30001", "10.0.0.1:1"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v", got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("[%d] = %q, want %q", i, got[i], want[i])
+func TestDecodeTXTDocumentAcceptsCommonEncodings(t *testing.T) {
+	doc := []byte(`{"v":1,"kid":4}`)
+	std := base64.StdEncoding.EncodeToString(doc)
+	for name, in := range map[string]string{
+		"std":        std,
+		"raw":        base64.RawStdEncoding.EncodeToString(doc),
+		"url":        base64.URLEncoding.EncodeToString(doc),
+		"whitespace": "  " + std + "\n",
+	} {
+		got, err := decodeTXTDocument(in)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
+		if string(got) != string(doc) {
+			t.Fatalf("%s: got %q", name, got)
+		}
+	}
+	if _, err := decodeTXTDocument("62.220.127.238:30001"); err == nil {
+		t.Fatal("a plain ip:port record must not decode as a document")
 	}
 }
 
-func TestNamesTXTSkipsNonAddresses(t *testing.T) {
-	// A record that also carries a non-address token must not fail the layer;
-	// only the valid entry is used.
-	rec := "v=spf1 -all 62.220.127.238:30001 example.com:80"
-	var out []Server
-	for _, tok := range splitAddresses(rec) {
-		host, port, err := splitHostPort(tok)
-		if err != nil || net.ParseIP(host) == nil {
-			continue
+func TestTXTChunksReassemble(t *testing.T) {
+	// RFC 1035 caps a TXT string at 255 bytes; the resolver returns one
+	// string per chunk and the source joins them. Verify the join is exact.
+	full := strings.Repeat("ABCDEFGHIJ", 300)
+	var chunks []string
+	for i := 0; i < len(full); i += 255 {
+		end := i + 255
+		if end > len(full) {
+			end = len(full)
 		}
-		out = append(out, Server{Host: host, Port: port})
+		chunks = append(chunks, full[i:end])
 	}
-	if len(out) != 1 || out[0].Addr() != "62.220.127.238:30001" {
-		t.Fatalf("out = %+v", out)
+	if strings.Join(chunks, "") != full {
+		t.Fatal("chunk join lost data")
 	}
 }

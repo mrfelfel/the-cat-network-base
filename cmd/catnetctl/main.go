@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	catnet "github.com/mrfelfel/the-cat-network-base/lib"
@@ -37,6 +38,8 @@ func main() {
 		err = cmdInspect(os.Args[2:])
 	case "resolve":
 		err = cmdResolve(os.Args[2:])
+	case "txt":
+		err = cmdTXT(os.Args[2:])
 	case "sources":
 		fs := flag.NewFlagSet("sources", flag.ExitOnError)
 		rf := bindResolverFlags(fs)
@@ -66,6 +69,7 @@ commands:
   inspect  FILE
   resolve  -repo owner/name [-seeds ip:port,ip:port]
   sources  -repo owner/name
+  txt      servers.json -record _gameserver.example
 `)
 }
 
@@ -234,4 +238,44 @@ func goByteList(b []byte) string {
 		s += fmt.Sprintf("0x%02x, ", v)
 	}
 	return s
+}
+
+// cmdTXT prints the TXT record lines for a published document. Providers often
+// cap a record at 255 characters per quoted string; the output uses one string
+// per chunk, which every common DNS provider accepts (paste them as multiple
+// values of the same TXT record).
+func cmdTXT(args []string) error {
+	fs := flag.NewFlagSet("txt", flag.ExitOnError)
+	record := fs.String("record", "", "record name to print in the output")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		return errors.New("txt: exactly one file required")
+	}
+	raw, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	// Verify before publishing: a record carrying a document that does not
+	// open is worse than no record at all.
+	if _, err := catnet.ParseEnvelope(raw, catnet.Descriptor(), catnet.Keys); err != nil {
+		return fmt.Errorf("txt: refusing to publish an invalid document: %w", err)
+	}
+	enc := base64.StdEncoding.EncodeToString(raw)
+	name := *record
+	if name == "" {
+		name = "_gameserver"
+	}
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	fmt.Printf("; %d bytes -> %d chars of base64, %d chunks\n", len(raw), len(enc), (len(enc)+254)/255)
+	for i := 0; i < len(enc); i += 255 {
+		end := i + 255
+		if end > len(enc) {
+			end = len(enc)
+		}
+		fmt.Printf("%s\t300\tIN\tTXT\t\"%s\"\n", name, enc[i:end])
+	}
+	fmt.Printf("\n; single-line form (if your provider accepts one long value):\n%s\t300\tIN\tTXT\t\"%s\"\n", name, enc)
+	return nil
 }

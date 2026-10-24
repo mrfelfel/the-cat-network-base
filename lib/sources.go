@@ -3,6 +3,7 @@ package catnet
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -73,40 +74,38 @@ func (m HTTPMirror) Fetch(ctx context.Context) ([]byte, error) {
 	return body, nil
 }
 
-// NamesTXTResolver reads server addresses directly from a TXT record.
+// DNSTXTSource carries the signed document in a TXT record.
 //
-// Unlike every other layer, this one does not fetch a document: the record
-// *is* the answer. It exists for the case where HTTPS is filtered but DNS
-// still resolves, and it costs one DNS query. The record carries addresses
-// only, so it needs no signature — but that also means it is unverified, so
-// the caller must own the name and the results are treated as lower-trust
-// than a signed document (see TrustedByDNS).
+// The record holds the same signature-checked servers.json that the HTTPS
+// layers serve, base64-encoded and split across <=255-byte chunks (one per
+// quoted TXT string; the resolver concatenates them in order). Because the
+// signature lives inside the payload, a poisoned DNS can withhold the document
+// but cannot substitute addresses — unlike a plain "ip:port" TXT record, which
+// would be exactly the place a middlebox could redirect the client.
 //
-// Expected record value, one address per record or space/comma separated:
-//
-//	"62.220.127.238:30001"
-//	"62.220.127.238:30001, 203.0.113.7:30001"
-type NamesTXTResolver struct {
+// This is the path for "HTTPS filtered, DNS still works": it costs one or two
+// DNS queries and nothing else.
+type DNSTXTSource struct {
 	// Record is the TXT record name, e.g. "_gameserver.bizibazi.ir".
 	Record string
 	// Server is an optional resolver "ip:port"; empty uses the system one.
 	Server string
-	// Timeout bounds the lookup. Default 800ms.
+	// Timeout bounds the lookup. Default 900ms — a 1 KiB TXT record is a few
+	// round trips on a slow mobile link.
 	Timeout time.Duration
 }
 
-func (d NamesTXTResolver) Name() string {
+func (d DNSTXTSource) Name() string {
 	if d.Record == "" {
-		return "names-txt"
+		return "dns-txt"
 	}
-	return "names-txt:" + d.Record
+	return "dns-txt:" + d.Record
 }
 
-// Lookup returns the addresses in the record, in record order.
-func (d NamesTXTResolver) Lookup(ctx context.Context) ([]Server, error) {
+func (d DNSTXTSource) Fetch(ctx context.Context) ([]byte, error) {
 	timeout := d.Timeout
 	if timeout <= 0 {
-		timeout = 800 * time.Millisecond
+		timeout = 900 * time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -123,44 +122,37 @@ func (d NamesTXTResolver) Lookup(ctx context.Context) ([]Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Server
-	for _, rec := range records {
-		for _, tok := range splitAddresses(rec) {
-			host, port, err := splitHostPort(tok)
-			if err != nil {
-				continue
-			}
-			if net.ParseIP(host) == nil {
-				continue
-			}
-			out = append(out, Server{Host: host, Port: port, Tag: "dns-txt"})
+	if len(records) == 0 {
+		return nil, fmt.Errorf("%s: no TXT records", d.Name())
+	}
+
+	// Preferred form: base64 chunks. The alternatives exist so a record that
+	// was written by hand (or by a provider that re-encodes it) still works:
+	// a full JSON document stored directly in one record, or base64 with
+	// whitespace inserted by the resolver.
+	joined := strings.Join(records, "")
+	if doc, err := decodeTXTDocument(joined); err == nil {
+		return doc, nil
+	}
+	if strings.HasPrefix(strings.TrimSpace(joined), "{") {
+		return []byte(joined), nil
+	}
+	return nil, fmt.Errorf("%s: TXT record is not a catnet document", d.Name())
+}
+
+// decodeTXTDocument tries the base64 encodings a TXT record may use: standard,
+// raw (no padding), and URL-safe, in that order.
+func decodeTXTDocument(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) > 0 {
+			return b, nil
 		}
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%s: no usable addresses in TXT", d.Name())
-	}
-	return out, nil
+	return nil, fmt.Errorf("not base64")
 }
-
-func (d NamesTXTResolver) Fetch(context.Context) ([]byte, error) {
-	return nil, errNotADocument
-}
-
-// splitAddresses splits a record on commas and whitespace, dropping empties.
-func splitAddresses(rec string) []string {
-	fields := strings.FieldsFunc(rec, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
-	out := fields[:0]
-	for _, f := range fields {
-		if f = strings.TrimSpace(f); f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-var errNotADocument = fmt.Errorf("names-txt carries addresses, not a document")
 
 // SeedSource asks a hard-coded ip:port to serve the document over plain HTTP.
 // This is the last line of defence: it needs neither DNS nor TLS, only that

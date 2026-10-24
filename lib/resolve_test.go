@@ -256,7 +256,7 @@ func TestBuildSourceOrder(t *testing.T) {
 		"static:185.199.111.133→raw.githubusercontent.com",
 		"dns",
 		"udp-dns",
-		"names-txt:_gameserver.bizibazi.ir",
+		"dns-txt:_gameserver.bizibazi.ir",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("sources = %v", got)
