@@ -94,32 +94,46 @@ Rules the library enforces after decryption **and** signature verification:
   `port` is `1..65535`; `weight` `0..100`, descending order preferred
 - at least one server present
 
-## 5. Sources, in attempt order
+## 5. Layers, strictly in order
 
-All sources return the **same bytes** for the same revision. The library
-verifies signature first, so a poisoned mirror cannot substitute content.
+Unlike a race, each layer is attempted only when every earlier one failed. A
+layer succeeds only if its bytes pass signature and payload validation, so a
+captive portal or a hostile mirror falls through instead of poisoning the
+result.
 
-| # | source | why it exists |
-|---|---|---|
-| 1 | disk cache (previous success) | offline start, instant |
-| 2 | `github.com` raw (raw.githubusercontent.com) | canonical |
-| 3 | operator GitHub mirror (`scorpian.ir/repos/...`) | GH blocked, mirror reachable |
-| 4 | jsDelivr / ghproxy / raw.githack CDN mirrors | GH + operator mirror blocked |
-| 5 | `DNS TXT _catnet.<domain>` — base64 JSON | HTTPS filtered but DNS works |
-| 6 | hard-coded seed IPs (bootstrap `servers.json` served by the network itself) | DNS + HTTPS both dead |
+| # | layer | what it needs | when it wins |
+|---|---|---|---|
+| 0 | **seed probe** — parallel TCP connect to hard-coded `ip:port` | nothing | a server is already reachable |
+| 1 | **static IP** — `https://raw.githubusercontent.com<path>` dialled at a literal GitHub IP, plus internal mirrors | no DNS | DNS is dead or poisoned |
+| 1 | **internal mirrors** — Liara packages, operator mirror, same static-IP trick | no DNS | GitHub blocked, mirror reachable |
+| 2 | **light DNS** — DoT/DoH addressed by IP, filtered answers rejected | one of `8.8.8.8`, `1.1.1.1` | static IPs stale, DNS usable |
+| 3 | **DNS TXT** — `_catnet.<domain>` | DNS only | HTTPS filtered |
+| 4 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
 
-Source 6 is the floor: the library ships 2–3 seed `ip:port` values and fetches
-`/owpengram/net` from them. This is why the protocol must never require a
-hostname lookup to reach the seed.
+Between the cache check and layer 0 there is no gap: a fresh cached document
+returns in microseconds, and an expired one is held as the fallback while the
+layers run.
 
-The GitHub-family sources are requested with `?t=<unix-now>` appended so that
-CDN edges which cache aggressively (jsDelivr, some mirrors) do not serve a
-blob older than its own `expires_at`. Sources that reject unknown query
-parameters simply ignore it.
+### Why layer 0 matters
 
-A source is "successful" only if it delivers bytes whose signature and payload
-validate. Partial/truncated/CAPTIVE-PORTAL HTML responses all fail here and
-fall through to the next source.
+A TCP connect to a known address is the cheapest possible proof that the
+network works. It needs no signature, no document and no DNS, and it runs for
+every seed in parallel with a 500ms overall budget. When a seed answers, the
+client can connect immediately and refresh the address list in the background.
+
+### Filtered DNS detection
+
+Iranian filtering commonly answers with `10.x`, `127.x` or `0.0.0.0`. Layer 2
+rejects private, loopback, link-local, unspecified and multicast answers, and
+only then asks the explicit resolvers. IPv4 answers are preferred over IPv6
+because v6 routes are frequently broken on mobile networks there.
+
+### Cache freshness by time bucket
+
+CDN edges cache by full URL. Clients compute `b = floor(unix/600)` and append
+it, so every client in the same 10-minute window requests the same revision.
+The publisher writes at most once per bucket (see [6](#6-caching)). Hosts that
+ignore unknown query parameters are unaffected.
 
 ## 6. Caching
 

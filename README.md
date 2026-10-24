@@ -71,12 +71,20 @@ val addr = c.firstAddr(12000)   // "" + exception on total failure
 val json = c.resolveJSON(12000) // full result incl. source and stale flag
 ```
 
-## Sources, in race order
+## Layers, in order
 
-`raw.githubusercontent.com` → operator mirror (`scorpian.ir/repos/...`) →
-jsDelivr → ghproxy → raw.githack → DNS `TXT` → hard-coded seed `ip:port`.
-Sources are raced concurrently and the first document that verifies wins; the
-disk cache is checked first and used as a fallback when everything else fails.
+Each layer is tried only if every earlier one failed:
+
+| # | layer | needs |
+|---|---|---|
+| 0 | seed probe — parallel TCP connect to hard-coded `ip:port`, 500ms | nothing |
+| 1 | static IP — GitHub raw at literal IPs, then internal mirrors | no DNS |
+| 2 | light DNS — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` |
+| 3 | DNS TXT `_catnet.<domain>` | DNS |
+| 4 | Apps Script relay | Google reachable |
+
+A fresh cached document returns before any of this runs; an expired one is
+kept as the fallback.
 
 ## Development
 
