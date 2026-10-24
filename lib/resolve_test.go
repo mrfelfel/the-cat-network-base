@@ -255,6 +255,7 @@ func TestBuildSourceOrder(t *testing.T) {
 		"static:185.199.110.133→raw.githubusercontent.com",
 		"static:185.199.111.133→raw.githubusercontent.com",
 		"dns",
+		"udp-dns",
 		"dns:_catnet.example",
 	}
 	if len(got) != len(want) {

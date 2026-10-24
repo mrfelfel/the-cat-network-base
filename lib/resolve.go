@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -49,6 +50,17 @@ type Resolver struct {
 	seeds  []SeedSource
 	// ProbeTimeout bounds layer zero. Zero uses 500ms.
 	ProbeTimeout time.Duration
+	// repo/branch/file are the document coordinates, needed to rebuild layers
+	// after learning new inputs from a payload.
+	repo, branch, file string
+	// learned holds inputs taken from the last verified payload, so the next
+	// resolve starts with addresses the operator has actually published.
+	learned *Payload
+	// learnPath is where learned inputs are persisted between runs.
+	learnPath string
+	// forceRefresh makes Resolve skip the cache fast-path. Set by Refresher.
+	forceRefresh bool
+	mu           sync.Mutex
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -72,6 +84,9 @@ type Options struct {
 	DNSHosts []HostPath
 	// Resolvers are explicit DNS resolvers, "ip:53" / "dot:ip" / "doh:https://ip/query".
 	Resolvers []string
+	// UDPServers are plain-UDP DNS servers tried after the encrypted ones,
+	// e.g. national resolvers such as "10.202.10.202".
+	UDPServers []string
 	// DNSName is an optional TXT record, "_catnet.example.com".
 	DNSName string
 	// AppsScript is the last-resort relay URL.
@@ -82,19 +97,6 @@ type Options struct {
 	Seeds []SeedSource
 	// CachePath is the document cache file. Empty disables caching.
 	CachePath string
-}
-
-// MirrorHost is an internal or vendor mirror addressed by IP.
-type MirrorHost struct {
-	// IP is the literal address to dial.
-	IP string
-	// Host is the TLS name and Host header, e.g. "package-mirror.liara.ir".
-	Host string
-	// Path is the document URL path on that host.
-	Path string
-	// PlainHTTP disables TLS for mirrors that only serve HTTP (some internal
-	// package mirrors on port 80).
-	PlainHTTP bool
 }
 
 // defaultGitHubIPs are the addresses raw.githubusercontent.com and
@@ -123,11 +125,32 @@ func Build(o Options) *Resolver {
 	if o.File == "" {
 		o.File = "servers.json"
 	}
+	r := &Resolver{
+		cache:  newCache(o.CachePath),
+		seeds:  o.Seeds,
+		repo:   o.Repo,
+		branch: o.Branch,
+		file:   o.File,
+	}
+	if o.CachePath != "" {
+		r.learnPath = o.CachePath + ".registry.json"
+		r.learned = loadLearned(r.learnPath)
+		if r.learned != nil {
+			r.rebuildLayers(o)
+		}
+	}
+	if r.layers == nil {
+		r.layers = buildLayers(o)
+	}
+	return r
+}
+
+// buildLayers turns Options into the ordered chain.
+func buildLayers(o Options) []Source {
 	docPath := "/" + o.Repo + "/" + o.Branch + "/" + o.File
 	if o.Repo == "" {
 		docPath = "/" + o.File
 	}
-
 	ips := o.GitHubIPs
 	if len(ips) == 0 {
 		ips = defaultGitHubIPs
@@ -144,34 +167,82 @@ func Build(o Options) *Resolver {
 		layers = append(layers, mirrorSource(m, docPath))
 	}
 
-	// Layer 2 — light DNS, but reject filtered answers.
 	hosts := o.DNSHosts
 	if len(hosts) == 0 {
 		for _, h := range defaultDNSHosts {
 			hosts = append(hosts, HostPath{Host: h, Path: docPath})
 		}
 	}
+
+	// Layer 2 — encrypted DNS (DoT/DoH) addressed by IP.
 	resolvers := o.Resolvers
 	if len(resolvers) == 0 {
 		resolvers = []string{"dot:8.8.8.8", "dot:1.1.1.1", "doh:https://8.8.8.8/dns-query"}
 	}
 	layers = append(layers, DNSLayer{Hosts: hosts, Resolvers: resolvers})
 
-	// Layer 3 — DNS TXT on our own domain.
+	// Layer 3 — plain UDP DNS: the carrier's or a national resolver, still
+	// reachable when 853 and 443-to-DoH are blocked.
+	layers = append(layers, UDPDNSSource{Hosts: hosts, Servers: o.UDPServers})
+
+	// Layer 4 — DNS TXT on our own domain.
 	if o.DNSName != "" {
 		layers = append(layers, DNSTXTSource{Name_: o.DNSName})
 	}
 
-	// Layer 4 — last resort: the Google Apps Script relay.
+	// Layer 5 — last resort: the Google Apps Script relay.
 	if o.AppsScript != "" {
 		layers = append(layers, AppsScriptSource{URL: o.AppsScript, Token: o.AppsScriptToken})
 	}
+	return layers
+}
 
-	return &Resolver{
-		layers: layers,
-		cache:  newCache(o.CachePath),
-		seeds:  o.Seeds,
+// rebuildLayers re-derives the chain with the learned registry layered on top
+// of Options. Learned values win because the operator published them more
+// recently than this binary was built.
+func (r *Resolver) rebuildLayers(o Options) {
+	if r.learned == nil {
+		return
 	}
+	if len(r.learned.GitHubIPs) > 0 {
+		o.GitHubIPs = r.learned.GitHubIPs
+	}
+	if len(r.learned.Mirrors) > 0 {
+		o.Mirrors = append(o.Mirrors, r.learned.Mirrors...)
+	}
+	if len(r.learned.Resolvers) > 0 {
+		o.Resolvers = append(r.learned.Resolvers, o.Resolvers...)
+	}
+	if r.learned.DNSTXT != "" {
+		o.DNSName = r.learned.DNSTXT
+	}
+	if r.learned.AppsScript != "" {
+		o.AppsScript = r.learned.AppsScript
+	}
+	r.layers = buildLayers(o)
+}
+
+// learn records the registry from a verified payload and persists it, so the
+// next run — even offline — starts with the addresses the operator published.
+func (r *Resolver) learn(p Payload) {
+	reg := Payload{
+		Version:    p.Version,
+		IssuedAt:   p.IssuedAt,
+		ExpiresAt:  p.ExpiresAt,
+		GitHubIPs:  p.GitHubIPs,
+		Mirrors:    p.Mirrors,
+		Resolvers:  p.Resolvers,
+		DNSTXT:     p.DNSTXT,
+		AppsScript: p.AppsScript,
+	}
+	if reg.GitHubIPs == nil && reg.Mirrors == nil && reg.Resolvers == nil &&
+		reg.DNSTXT == "" && reg.AppsScript == "" {
+		return
+	}
+	r.learned = &reg
+	storeLearned(r.learnPath, reg)
+	o := Options{Repo: r.repo, Branch: r.branch, File: r.file}
+	r.rebuildLayers(o)
 }
 
 func mirrorSource(m MirrorHost, docPath string) Source {
@@ -204,6 +275,10 @@ func (r *Resolver) Resolve(ctx context.Context) (*Result, error) {
 	}
 	res := &Result{FetchedAt: now(), Attempts: []Attempt{}}
 
+	r.mu.Lock()
+	force := r.forceRefresh
+	r.mu.Unlock()
+
 	var staleFallback []byte
 	if raw := r.cache.load(); raw != nil {
 		env, err := ParseEnvelope(raw, Descriptor(), Keys)
@@ -214,7 +289,7 @@ func (r *Resolver) Resolve(ctx context.Context) (*Result, error) {
 			res.Attempts = append(res.Attempts, Attempt{Layer: -1, Source: "cache"})
 			res.fill(env, "cache", -1)
 			res.Cached = true
-			if !env.Payload.Expired(now()) {
+			if !force && !env.Payload.Expired(now()) {
 				return res, nil
 			}
 			res.Stale = true
@@ -260,6 +335,7 @@ func (r *Resolver) Resolve(ctx context.Context) (*Result, error) {
 		}
 		res.Attempts = append(res.Attempts, Attempt{Layer: n, Source: layer.Name()})
 		r.cache.store(env.Raw)
+		r.learn(env.Payload)
 		probed := res.Probed
 		res.fill(env, layer.Name(), n)
 		res.Probed = probed

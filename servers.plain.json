@@ -3,7 +3,34 @@
   "issued_at": "2026-10-25T00:00:00Z",
   "expires_at": "2026-11-24T00:00:00Z",
   "min_lib_version": 1,
+
   "servers": [
     {"host": "62.220.127.238", "port": 30001, "tag": "primary", "weight": 100}
-  ]
+  ],
+
+  "github_ips": [
+    "185.199.108.133",
+    "185.199.109.133",
+    "185.199.110.133",
+    "185.199.111.133"
+  ],
+
+  "mirrors": [
+    {"ip": "185.199.108.133", "host": "raw.githubusercontent.com"},
+    {"ip": "162.159.140.98", "host": "cdn.jsdelivr.net"},
+    {"ip": "94.182.50.10", "host": "package-mirror.liara.ir", "path": "/catnet/servers.json"}
+  ],
+
+  "resolvers": [
+    "dot:8.8.8.8",
+    "dot:1.1.1.1",
+    "doh:https://8.8.8.8/dns-query",
+    "10.202.10.202",
+    "10.202.10.102",
+    "178.22.122.100",
+    "185.51.200.2"
+  ],
+
+  "dns_txt": "_catnet.cr0.ir",
+  "apps_script": ""
 }

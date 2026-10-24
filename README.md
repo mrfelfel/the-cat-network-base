@@ -79,12 +79,22 @@ Each layer is tried only if every earlier one failed:
 |---|---|---|
 | 0 | seed probe — parallel TCP connect to hard-coded `ip:port`, 500ms | nothing |
 | 1 | static IP — GitHub raw at literal IPs, then internal mirrors | no DNS |
-| 2 | light DNS — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` |
-| 3 | DNS TXT `_catnet.<domain>` | DNS |
-| 4 | Apps Script relay | Google reachable |
+| 2 | encrypted DNS — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` |
+| 3 | plain UDP DNS — carrier or national resolver | port 53 |
+| 4 | DNS TXT `_catnet.<domain>` | DNS |
+| 5 | Apps Script relay | Google reachable |
 
 A fresh cached document returns before any of this runs; an expired one is
 kept as the fallback.
+
+`servers.json` is also the registry: it carries `github_ips`, `mirrors`,
+`resolvers`, `dns_txt` and `apps_script`, so each layer learns its inputs from
+the published document instead of from constants baked into the binary. The
+client persists what it learned beside its cache and rebuilds the chain from it
+on the next run.
+
+`lib.Refresher` re-resolves on a timer (default 30 min, bypassing the cache) so
+the cache and registry stay current whenever the network happens to be up.
 
 ## Development
 

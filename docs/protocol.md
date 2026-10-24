@@ -76,23 +76,61 @@ store / CI secret).
 {
   "version": 1,
   "issued_at": "2026-10-25T00:00:00Z",
-  "expires_at": "2026-11-25T00:00:00Z",
+  "expires_at": "2026-11-24T00:00:00Z",
   "min_lib_version": 1,
+
   "servers": [
-    {"host": "62.220.127.238", "port": 30001, "tag": "primary", "weight": 100},
-    {"host": "203.0.113.7",    "port": 30001, "tag": "backup",  "weight": 50}
-  ]
+    {"host": "62.220.127.238", "port": 30001, "tag": "primary", "weight": 100}
+  ],
+
+  "github_ips": ["185.199.108.133", "185.199.109.133"],
+  "mirrors": [
+    {"ip": "94.182.50.10", "host": "package-mirror.liara.ir", "path": "/catnet/servers.json"}
+  ],
+  "resolvers": ["dot:8.8.8.8", "doh:https://1.1.1.1/dns-query", "10.202.10.202"],
+  "dns_txt": "_catnet.cr0.ir",
+  "apps_script": "https://script.google.com/macros/s/<id>/exec"
 }
 ```
+
+`servers` is the answer. Everything after it is the **registry**: the inputs
+each layer needs, published in the same document so the client learns them
+from the network instead of carrying stale constants in the binary.
+
+| field | used by | note |
+|---|---|---|
+| `github_ips` | layer 1 | literal addresses for `raw.githubusercontent.com` |
+| `mirrors` | layer 1 | `ip` + `host` (+ optional `path`, `plain_http`) |
+| `resolvers` | layers 2–3 | `ip` (UDP), `dot:ip`, `doh:https://ip/query` |
+| `dns_txt` | layer 4 | TXT record name |
+| `apps_script` | layer 5 | relay deployment URL |
 
 Rules the library enforces after decryption **and** signature verification:
 
 - `version == 1`
-- `now < expires_at` → otherwise the blob is `stale` (still returned, flagged,
-  and only used when no better source succeeded)
-- `host` is either a dotted-quad IPv4 or a bare DNS name (no scheme, no path);
-  `port` is `1..65535`; `weight` `0..100`, descending order preferred
+- `now < expires_at`, or the document is `stale`
+- `host` is a dotted-quad IP or a bare DNS name; `port` is `1..65535`;
+  `weight` is `0..100`, descending order preferred
 - at least one server present
+
+### Learning and persistence
+
+On every successful verify the client stores the registry fields beside its
+cache (`<cache>.registry.json`, mode `0600`) and rebuilds its layer chain from
+them, so the next run — including an offline one — starts from the operator's
+newest published addresses rather than the binary's defaults.
+
+The registry is unsigned, and that is deliberate. It only reorders which
+endpoint is tried first, and a wrong entry costs one timeout: the document that
+supplies the real addresses is always signature-checked. A tampered registry
+therefore cannot redirect the client.
+
+### Periodic refresh
+
+A background refresher re-resolves on an interval (default 30 minutes) while
+the app runs, bypassing the cache fast-path. Since connectivity in a censored
+network comes and goes, this keeps the cache and the registry current during
+the windows when upstream is reachable.
 
 ## 5. Layers, strictly in order
 
@@ -106,9 +144,10 @@ result.
 | 0 | **seed probe** — parallel TCP connect to hard-coded `ip:port` | nothing | a server is already reachable |
 | 1 | **static IP** — `https://raw.githubusercontent.com<path>` dialled at a literal GitHub IP, plus internal mirrors | no DNS | DNS is dead or poisoned |
 | 1 | **internal mirrors** — Liara packages, operator mirror, same static-IP trick | no DNS | GitHub blocked, mirror reachable |
-| 2 | **light DNS** — DoT/DoH addressed by IP, filtered answers rejected | one of `8.8.8.8`, `1.1.1.1` | static IPs stale, DNS usable |
-| 3 | **DNS TXT** — `_catnet.<domain>` | DNS only | HTTPS filtered |
-| 4 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
+| 2 | **encrypted DNS** — DoT/DoH addressed by IP, filtered answers rejected | `8.8.8.8` / `1.1.1.1` reachable | static IPs stale, encrypted DNS works |
+| 3 | **plain UDP DNS** — carrier or national resolver | port 53 to any resolver | DoT/DoH blocked, UDP still answers |
+| 4 | **DNS TXT** — `_catnet.<domain>` | DNS only | HTTPS filtered |
+| 5 | **Apps Script** — minimal Google relay returning the document | Google reachable | everything else blocked |
 
 Between the cache check and layer 0 there is no gap: a fresh cached document
 returns in microseconds, and an expired one is held as the fallback while the

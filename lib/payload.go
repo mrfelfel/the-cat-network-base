@@ -11,12 +11,45 @@ import (
 )
 
 // Payload is the decrypted JSON document.
+//
+// It is both the answer ("connect here") and the registry ("this is how you
+// find the next revision"): the file carries the addresses, the resolvers, the
+// mirrors and the relay URL, so the library learns every layer's inputs from
+// the document itself and does not depend on a shipped constant going stale.
 type Payload struct {
 	Version       int       `json:"version"`
 	IssuedAt      time.Time `json:"issued_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	MinLibVersion int       `json:"min_lib_version,omitempty"`
-	Servers       []Server  `json:"servers"`
+
+	// Servers are the addresses to connect to.
+	Servers []Server `json:"servers"`
+
+	// Registry — inputs for the next lookup. Every field is optional; a
+	// missing one means "keep the built-in default".
+
+	// GitHubIPs are literal addresses for raw.githubusercontent.com, tried
+	// before any DNS lookup.
+	GitHubIPs []string `json:"github_ips,omitempty"`
+	// Mirrors are internal mirrors addressed by IP.
+	Mirrors []MirrorHost `json:"mirrors,omitempty"`
+	// Resolvers are DNS resolvers in the layer syntax: "ip:53",
+	// "dot:ip[:port]", "doh:https://ip/query". Listed before the built-ins.
+	Resolvers []string `json:"resolvers,omitempty"`
+	// DNSTXT is the TXT record that carries the document.
+	DNSTXT string `json:"dns_txt,omitempty"`
+	// AppsScript is the last-resort relay URL.
+	AppsScript string `json:"apps_script,omitempty"`
+}
+
+// MirrorHost is a mirror addressed by IP. Declared here because it travels in
+// the payload as well as in Options.
+type MirrorHost struct {
+	IP   string `json:"ip"`
+	Host string `json:"host"`
+	Path string `json:"path,omitempty"`
+	// PlainHTTP disables TLS for mirrors that only serve HTTP.
+	PlainHTTP bool `json:"plain_http,omitempty"`
 }
 
 // Server is one address the client may connect to.
