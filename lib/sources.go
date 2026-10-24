@@ -91,6 +91,16 @@ type DNSTXTSource struct {
 	Server string
 	// Timeout bounds the lookup. Default 700ms — the record is one string.
 	Timeout time.Duration
+	// lookupTXT overrides the resolver call; tests use it to avoid needing a
+	// real DNS server. nil means net.Resolver.LookupTXT.
+	lookupTXT func(ctx context.Context, r *net.Resolver, name string) ([]string, error)
+}
+
+func (d DNSTXTSource) resolveTXT(ctx context.Context, r *net.Resolver) ([]string, error) {
+	if d.lookupTXT != nil {
+		return d.lookupTXT(ctx, r, d.Record)
+	}
+	return r.LookupTXT(ctx, d.Record)
 }
 
 func (d DNSTXTSource) Name() string {
@@ -117,7 +127,7 @@ func (d DNSTXTSource) Lookup(ctx context.Context) ([]Server, error) {
 			return dd.DialContext(ctx, network, server)
 		}}
 	}
-	records, err := r.LookupTXT(ctx, d.Record)
+	records, err := d.resolveTXT(ctx, r)
 	if err != nil {
 		return nil, err
 	}
