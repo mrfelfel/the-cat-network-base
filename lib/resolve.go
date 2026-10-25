@@ -91,6 +91,12 @@ type Options struct {
 	// UDPServers are plain-UDP DNS servers tried after the encrypted ones,
 	// e.g. national resolvers such as "10.202.10.202".
 	UDPServers []string
+	// GoProxies are Go module proxies that mirror the repository, e.g. Liara's
+	// "https://package-mirror.liara.ir/repository/go". Tried after the direct
+	// static-IP fetch because each costs a module zip (~70 KiB).
+	GoProxies []string
+	// GoModule is the module path served by those proxies. Defaults to Repo.
+	GoModule string
 	// ServerName is the DNS name whose TXT record carries the signed
 	// document, e.g. "_gameserver.bizibazi.ir". Layer 4 reads it.
 	ServerName string
@@ -172,6 +178,16 @@ func buildLayers(o Options) []Source {
 		layers = append(layers, mirrorSource(m, docPath))
 	}
 
+	// Layer 1b — Go module proxies. Every Iranian Go developer needs these,
+	// so filtering leaves them up; they carry the whole repo as a zip.
+	module := o.GoModule
+	if module == "" {
+		module = o.Repo
+	}
+	for _, proxy := range o.GoProxies {
+		layers = append(layers, GoProxySource{Base: proxy, Module: module, File: o.File})
+	}
+
 	hosts := o.DNSHosts
 	if len(hosts) == 0 {
 		for _, h := range defaultDNSHosts {
@@ -212,6 +228,9 @@ func (r *Resolver) rebuildLayers(o Options) {
 	if len(r.learned.GitHubIPs) > 0 {
 		o.GitHubIPs = r.learned.GitHubIPs
 	}
+	if len(r.learned.GoProxies) > 0 {
+		o.GoProxies = append(r.learned.GoProxies, o.GoProxies...)
+	}
 	if len(r.learned.Mirrors) > 0 {
 		o.Mirrors = append(o.Mirrors, r.learned.Mirrors...)
 	}
@@ -235,13 +254,14 @@ func (r *Resolver) learn(p Payload) {
 		IssuedAt:   p.IssuedAt,
 		ExpiresAt:  p.ExpiresAt,
 		GitHubIPs:  p.GitHubIPs,
+		GoProxies:  p.GoProxies,
 		Mirrors:    p.Mirrors,
 		Resolvers:  p.Resolvers,
 		ServerName: p.ServerName,
 		AppsScript: p.AppsScript,
 	}
-	if reg.GitHubIPs == nil && reg.Mirrors == nil && reg.Resolvers == nil &&
-		reg.ServerName == "" && reg.AppsScript == "" {
+	if reg.GitHubIPs == nil && reg.GoProxies == nil && reg.Mirrors == nil &&
+		reg.Resolvers == nil && reg.ServerName == "" && reg.AppsScript == "" {
 		return
 	}
 	r.learned = &reg

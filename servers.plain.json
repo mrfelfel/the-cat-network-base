@@ -17,6 +17,11 @@
     "185.199.110.133",
     "185.199.111.133"
   ],
+  "go_proxies": [
+    "https://package-mirror.liara.ir/repository/go",
+    "https://goproxy.cn",
+    "https://proxy.golang.org"
+  ],
   "mirrors": [
     {
       "ip": "185.199.108.133",

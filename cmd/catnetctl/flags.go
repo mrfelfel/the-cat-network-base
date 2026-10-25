@@ -22,6 +22,7 @@ type resolverFlags struct {
 	mirrors *string
 	script  *string
 	udpdns  *string
+	goproxy *string
 	cache   *string
 }
 
@@ -35,6 +36,7 @@ func bindResolverFlags(fs *flag.FlagSet) *resolverFlags {
 		mirrors: fs.String("mirrors", "", "comma-separated mirror specs ip=host[:path][,http]"),
 		script:  fs.String("script", "", "Apps Script relay URL (last resort)"),
 		udpdns:  fs.String("udpdns", "", "comma-separated plain-UDP DNS servers, e.g. 10.202.10.202"),
+		goproxy: fs.String("goproxy", "", "comma-separated Go module proxies, e.g. https://package-mirror.liara.ir/repository/go"),
 		cache:   fs.String("cache", defaultCachePath(), "cache file (empty disables)"),
 	}
 }
@@ -50,6 +52,7 @@ func buildResolver(fs *flag.FlagSet, r *resolverFlags) *catnet.Resolver {
 		ServerName: *r.dns,
 		AppsScript: *r.script,
 		UDPServers: splitComma(*r.udpdns),
+		GoProxies:  splitComma(*r.goproxy),
 		CachePath:  *r.cache,
 	}
 	for _, spec := range splitComma(*r.mirrors) {

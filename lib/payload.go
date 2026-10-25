@@ -31,6 +31,9 @@ type Payload struct {
 	// GitHubIPs are literal addresses for raw.githubusercontent.com, tried
 	// before any DNS lookup.
 	GitHubIPs []string `json:"github_ips,omitempty"`
+	// GoProxies are Go module proxies that carry the whole repository as a
+	// zip. Iranian filtering leaves these up because Go developers need them.
+	GoProxies []string `json:"go_proxies,omitempty"`
 	// Mirrors are internal mirrors addressed by IP.
 	Mirrors []MirrorHost `json:"mirrors,omitempty"`
 	// Resolvers are DNS resolvers in the layer syntax: "ip:53",

@@ -20,6 +20,7 @@ import (
 type learnedRegistry struct {
 	IssuedAt   string       `json:"issued_at"`
 	GitHubIPs  []string     `json:"github_ips,omitempty"`
+	GoProxies  []string     `json:"go_proxies,omitempty"`
 	Mirrors    []MirrorHost `json:"mirrors,omitempty"`
 	Resolvers  []string     `json:"resolvers,omitempty"`
 	ServerName string       `json:"server_name,omitempty"`
@@ -41,6 +42,7 @@ func loadLearned(path string) *Payload {
 	return &Payload{
 		Version:    ProtocolVersion,
 		GitHubIPs:  lr.GitHubIPs,
+		GoProxies:  lr.GoProxies,
 		Mirrors:    lr.Mirrors,
 		Resolvers:  lr.Resolvers,
 		ServerName: lr.ServerName,
@@ -58,6 +60,7 @@ func storeLearned(path string, p Payload) {
 	b, err := json.MarshalIndent(learnedRegistry{
 		IssuedAt:   p.IssuedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		GitHubIPs:  p.GitHubIPs,
+		GoProxies:  p.GoProxies,
 		Mirrors:    p.Mirrors,
 		Resolvers:  p.Resolvers,
 		ServerName: p.ServerName,
