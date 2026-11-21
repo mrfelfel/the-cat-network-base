@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	catnet "github.com/mrfelfel/the-cat-network-base/lib"
@@ -27,14 +28,33 @@ type Client struct {
 //	seeds     — comma-separated ip:port fallbacks ("" for none).
 //	timeoutMs — the overall deadline; 0 uses 12000.
 func New(cacheDir string, seeds string, timeoutMs int) (*Client, error) {
+	return NewForFile(cacheDir, seeds, timeoutMs, "")
+}
+
+// NewForFile is New with an explicit document path inside the repo.
+//
+// The path is a parameter rather than a constant so a client can move to a
+// document layout that older clients cannot read — new fields, a new cache
+// name, a different shape — without breaking the ones already installed. An
+// empty file keeps the historical "servers.json" and its cache name, so a
+// caller that does not care about any of this behaves exactly as before.
+//
+// The cache filename is derived from the document path on purpose: two
+// documents must never share a cache entry, or a client pointing at the new
+// layout could be served the old document from disk.
+func NewForFile(cacheDir string, seeds string, timeoutMs int, file string) (*Client, error) {
 	cachePath := ""
 	if cacheDir != "" {
-		cachePath = cacheDir + "/catnet-servers.json"
+		name := "catnet-servers.json"
+		if file != "" {
+			name = "catnet-" + strings.NewReplacer("/", "_", "\\", "_").Replace(file) + ".cache"
+		}
+		cachePath = cacheDir + "/" + name
 	}
 	opts := catnet.Options{
 		Repo:      "mrfelfel/the-cat-network-base",
 		Branch:    "main",
-		File:      "servers.json",
+		File:      file,
 		CachePath: cachePath,
 		Seeds:     parseSeeds(seeds),
 	}

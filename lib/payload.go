@@ -85,12 +85,34 @@ func (p Payload) Sorted() []Server {
 	return out
 }
 
+// decodePayload parses a decrypted document.
+//
+// Unknown fields are IGNORED rather than rejected, and that is a deliberate
+// reversal. With DisallowUnknownFields, publishing any new field broke every
+// client already in the field: the whole document failed to parse, catnet fell
+// back to the seed, and the fleet lost address discovery for a change it never
+// needed to understand. Compatibility has to be forward-only, not exact.
+//
+// The guard that DisallowUnknownFields used to provide — "this document is not
+// one I understand, do not silently read zeros" — is kept in two explicit
+// checks below, so tolerance does not become a hole:
+//
+//  1. Version must match exactly. A future document that changed meaning, not
+//     just vocabulary, bumps it and is rejected here as before.
+//  2. At least one field this build knows must be present. An empty object, a
+//     wrong document, or JSON that parsed into nothing passes neither.
+//
+// Together those mean a document carrying only fields we do not know is still
+// rejected, while one carrying new fields alongside the ones we do know reads
+// cleanly.
 func decodePayload(plain []byte) (Payload, error) {
 	var p Payload
 	dec := json.NewDecoder(bytes.NewReader(plain))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Payload{}, fmt.Errorf("%w: payload is not valid JSON: %v", ErrFormat, err)
+	}
+	if !knownFieldsPresent(plain) {
+		return Payload{}, fmt.Errorf("%w: payload has no fields this build understands", ErrFormat)
 	}
 	if err := p.validate(); err != nil {
 		return Payload{}, err
@@ -98,7 +120,34 @@ func decodePayload(plain []byte) (Payload, error) {
 	return p, nil
 }
 
+// knownFieldsPresent reports whether the document carried at least one field
+// this build understands. It is the replacement for the "unknown field" guard:
+// with unknown fields tolerated, an object made entirely of them would decode
+// to an all-zero Payload and pass a naive validate.
+func knownFieldsPresent(plain []byte) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &probe); err != nil {
+		return false
+	}
+	for _, k := range []string{
+		"servers", "version", "issued_at", "expires_at", "min_lib_version",
+		"github_ips", "go_proxies", "mirrors", "resolvers", "server_name", "apps_script",
+	} {
+		if _, ok := probe[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (p Payload) validate() error {
+	// A future version is rejected rather than best-effort read. Tolerance for
+	// unknown FIELDS is what keeps this build working across additive changes;
+	// a version bump is the signal that a change was not additive, so reading
+	// it with this build's meaning would be guessing.
+	if p.Version > ProtocolVersion {
+		return fmt.Errorf("%w: payload version %d is newer than this client supports (%d)", ErrFormat, p.Version, ProtocolVersion)
+	}
 	if p.Version != ProtocolVersion {
 		return fmt.Errorf("%w: payload version %d", ErrFormat, p.Version)
 	}
