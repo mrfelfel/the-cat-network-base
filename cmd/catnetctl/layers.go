@@ -20,7 +20,7 @@ import (
 func cmdLayers(args []string) error {
 	fs := flag.NewFlagSet("layers", flag.ExitOnError)
 	rf := bindResolverFlags(fs)
-	block := fs.String("block", "", "comma-separated layers to simulate as blocked: static,dns,udp-dns,goproxy,mirror")
+	block := fs.String("block", "", "comma-separated layers to simulate as blocked: static,dns,udp-dns,goproxy,eitaa")
 	timeout := fs.Duration("timeout", 20*time.Second, "per-layer timeout")
 	_ = fs.Parse(args)
 
@@ -101,6 +101,9 @@ func layerCases(doc string) []layerCase {
 				Hosts:   []catnet.HostPath{{Host: "raw.githubusercontent.com", Path: d}},
 				Servers: []string{"10.202.10.202", "178.22.122.100"},
 			}, t)
+		}},
+		{"eitaa", "Eitaa channel (newest image)", func(d string, t time.Duration) (int, error) {
+			return fetchOne(context.Background(), catnet.EitaaChannelSource{Channel: "roseilandmenu"}, t*3)
 		}},
 		{"goproxy", "Go module proxy", func(d string, t time.Duration) (int, error) {
 			return fetchOne(context.Background(), catnet.GoProxySource{

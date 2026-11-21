@@ -44,6 +44,10 @@ type Payload struct {
 	ServerName string `json:"server_name,omitempty"`
 	// AppsScript is the last-resort relay URL.
 	AppsScript string `json:"apps_script,omitempty"`
+	// EitaaChannels are Eitaa channel usernames whose newest image may carry
+	// the document. Tried after every address route fails: each costs two
+	// requests (channel page, then the post's image), so they sit last.
+	EitaaChannels []string `json:"eitaa_channels,omitempty"`
 
 	// Config carries everything a client may want to change without shipping a
 	// new build: whether payments are offered, which support address is shown,
@@ -219,7 +223,7 @@ func knownFieldsPresent(plain []byte) bool {
 	}
 	for _, k := range []string{
 		"servers", "version", "issued_at", "expires_at", "min_lib_version",
-		"github_ips", "go_proxies", "mirrors", "resolvers", "server_name", "apps_script",
+		"github_ips", "go_proxies", "mirrors", "resolvers", "server_name", "apps_script", "eitaa_channels",
 	} {
 		if _, ok := probe[k]; ok {
 			return true

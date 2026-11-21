@@ -61,5 +61,8 @@
       "update_channel": "https://t.me/thecatir",
       "checkout_host": "cr0.ir"
     }
-  }
+  },
+  "eitaa_channels": [
+    "roseilandmenu"
+  ]
 }

@@ -96,6 +96,9 @@ type Options struct {
 	// UDPServers are plain-UDP DNS servers tried after the encrypted ones,
 	// e.g. national resolvers such as "10.202.10.202".
 	UDPServers []string
+	// EitaaChannels are channel usernames whose newest image may carry the
+	// document, for networks where GitHub is unreachable but Eitaa is not.
+	EitaaChannels []string
 	// GoProxies are Go module proxies that mirror the repository, e.g. Liara's
 	// "https://package-mirror.liara.ir/repository/go". Tried after the direct
 	// static-IP fetch because each costs a module zip (~70 KiB).
@@ -217,6 +220,12 @@ func buildLayers(o Options) []Source {
 	// reachable when 853 and 443-to-DoH are blocked.
 	layers = append(layers, UDPDNSSource{Hosts: hosts, Servers: o.UDPServers})
 
+	// Last: a channel post costs two requests and can hold only one carrier at
+	// a time, so it is tried only once everything cheaper has failed.
+	for _, ch := range o.EitaaChannels {
+		layers = append(layers, EitaaChannelSource{Channel: ch})
+	}
+
 	// Layer 4 — DNS TXT on our own domain.
 	if o.ServerName != "" {
 		layers = append(layers, DNSTXTSource{Record: o.ServerName})
@@ -238,6 +247,9 @@ func (r *Resolver) rebuildLayers(o Options) {
 	}
 	if len(r.learned.GitHubIPs) > 0 {
 		o.GitHubIPs = r.learned.GitHubIPs
+	}
+	if len(r.learned.EitaaChannels) > 0 {
+		o.EitaaChannels = append(o.EitaaChannels, r.learned.EitaaChannels...)
 	}
 	if len(r.learned.GoProxies) > 0 {
 		o.GoProxies = append(r.learned.GoProxies, o.GoProxies...)
@@ -278,9 +290,11 @@ func (r *Resolver) learn(p Payload) {
 		Resolvers:  p.Resolvers,
 		ServerName: p.ServerName,
 		AppsScript: p.AppsScript,
+		EitaaChannels: p.EitaaChannels,
 	}
 	if reg.GitHubIPs == nil && reg.GoProxies == nil && reg.Mirrors == nil &&
 		reg.Resolvers == nil && reg.ServerName == "" && reg.AppsScript == "" &&
+		len(p.EitaaChannels) == 0 &&
 		p.Config == nil {
 		return
 	}

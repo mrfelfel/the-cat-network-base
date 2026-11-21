@@ -235,3 +235,13 @@ func (r *bitReader) read(n int) ([]byte, bool) {
 	}
 	return out, true
 }
+
+// zlibCompressForTest is the inverse of the carrier's compression, kept next to
+// the format it belongs to so a test cannot drift from it.
+func zlibCompressForTest(b []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write(b); err != nil { return nil, err }
+	if err := zw.Close(); err != nil { return nil, err }
+	return buf.Bytes(), nil
+}
