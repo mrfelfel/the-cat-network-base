@@ -84,6 +84,74 @@ func (c *Client) ResolveJSON(timeoutMs int) (string, error) {
 	return encode(res), nil
 }
 
+// ConfigJSON returns the document's runtime configuration as JSON, or "" when
+// the document carried none. It never fails on a missing config: an app must
+// keep its compiled-in defaults, not show empty fields.
+//
+// Payment decisions are answered here rather than in Kotlin because the
+// document is the source of truth and only the Go side sees it: a client that
+// mirrored the rules would have to be updated in step with every rule change,
+// which defeats the purpose of putting them in the document.
+//
+// build is the distribution name ("play", "standalone", "bazaar"). An unknown
+// build is answered with payments disabled — a new distribution must never
+// inherit a purchase path because nobody listed it.
+func (c *Client) ConfigJSON(build string) string {
+	cfg := c.r.Config()
+	if cfg == nil {
+		return ""
+	}
+	out := map[string]any{}
+	if cfg.Payments != nil {
+		out["payments"] = map[string]any{
+			"direct_enabled": c.PaymentsEnabled(build),
+		}
+	}
+	if cfg.Support != nil {
+		out["support"] = cfg.Support
+	}
+	if cfg.URLs != nil {
+		out["urls"] = cfg.URLs
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+// PaymentsEnabled resolves the document's payment switch for one build.
+//
+// Order of precedence, and why it is this order:
+//
+//  1. An explicit per-build entry always wins. An operator listing "play":
+//     false means play, whatever the master switch says.
+//  2. Otherwise the master switch decides.
+//  3. If neither is present, payments are allowed subject to whatever the app
+//     itself requires — the document says nothing, so it imposes nothing.
+//
+// A build this document names with no value, or does not name at all, follows
+// (2) and (3). What it must NOT do is invent permission: when the document
+// carries a Builds map and the build is absent from it, the operator was
+// enumerating exceptions and did not include this one.
+func (c *Client) PaymentsEnabled(build string) bool {
+	cfg := c.r.Config()
+	if cfg == nil || cfg.Payments == nil {
+		return true
+	}
+	p := cfg.Payments
+	if p.Builds != nil {
+		if v, ok := p.Builds[build]; ok {
+			return v
+		}
+		if p.DirectEnabled == nil {
+			// The operator enumerated builds and this one was not among them.
+			return false
+		}
+	}
+	if p.DirectEnabled != nil {
+		return *p.DirectEnabled
+	}
+	return true
+}
+
 // FirstAddr is the convenience call most apps want: just the preferred
 // address, or "" and an error.
 func (c *Client) FirstAddr(timeoutMs int) (string, error) {

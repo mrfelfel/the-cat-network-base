@@ -44,6 +44,79 @@ type Payload struct {
 	ServerName string `json:"server_name,omitempty"`
 	// AppsScript is the last-resort relay URL.
 	AppsScript string `json:"apps_script,omitempty"`
+
+	// Config carries everything a client may want to change without shipping a
+	// new build: whether payments are offered, which support address is shown,
+	// where the public URLs point.
+	//
+	// A pointer, so a document without it is distinguishable from one that
+	// carries an empty object. Every consumer must treat a nil Config as "keep
+	// the values compiled into the app" — the shipped defaults are the floor,
+	// never a blank screen.
+	Config *Config `json:"config,omitempty"`
+}
+
+// Config is runtime configuration. Every field is optional and every consumer
+// falls back to its compiled-in value, so a server operator can change one
+// thing without having to restate the rest.
+type Config struct {
+	// Payments controls whether a purchase path is offered at all.
+	Payments *PaymentsConfig `json:"payments,omitempty"`
+	// Support is who the user reaches for help.
+	Support *SupportConfig `json:"support,omitempty"`
+	// URLs are the public pages the app links to.
+	URLs *URLsConfig `json:"urls,omitempty"`
+}
+
+// PaymentsConfig is the remote switch for the whole payment surface.
+//
+// Disabled wins over everything: an operator can turn every purchase off, on
+// every build, by publishing one signed document — no store release, no server
+// round trip, no waiting for a fleet update. That is the point of putting it
+// here rather than only in help.getAppConfig, which is unreachable when the
+// server itself is what is down.
+type PaymentsConfig struct {
+	// DirectEnabled is the master switch. Absent means "unchanged".
+	DirectEnabled *bool `json:"direct_enabled,omitempty"`
+	// Builds overrides the switch per distribution, keyed "play",
+	// "standalone", "bazaar". A build not named here follows DirectEnabled.
+	//
+	// A build name that is absent must be treated as DISABLED by a client that
+	// does not recognise it — a new distribution must never inherit payments
+	// just because nobody remembered to list it.
+	Builds map[string]bool `json:"builds,omitempty"`
+}
+
+// SupportConfig is how a user reaches a human. Either field may be set; a
+// phone is dialable, a bot is a link, and a client with neither must fall back
+// to the compiled-in address rather than showing the user nothing.
+type SupportConfig struct {
+	// Phone is a dialable number, e.g. "+982187210128". Empty means unset.
+	Phone string `json:"phone,omitempty"`
+	// Bot is a handle or URL to reach support, e.g. "https://t.me/thecat_support".
+	Bot string `json:"bot,omitempty"`
+	// Hours is a short human-readable note about availability.
+	Hours string `json:"hours,omitempty"`
+}
+
+// URLsConfig is the base for the public pages. Clients append their own paths
+// ("/privacy", "/dl") to Base, so moving the whole site is one edit here.
+type URLsConfig struct {
+	// Base is the origin every public page hangs off, e.g. "https://catroom.ir".
+	Base string `json:"base,omitempty"`
+	// Download is the page that serves the latest build. Empty derives from
+	// Base plus "/dl".
+	Download string `json:"download,omitempty"`
+	// Market is the username/gift market. Empty derives from Base.
+	Market string `json:"market,omitempty"`
+	// UpdateChannel is where a user is sent when their build is too old to
+	// connect, e.g. "https://t.me/thecatir".
+	UpdateChannel string `json:"update_channel,omitempty"`
+	// CheckoutHost is the host whose pages belong to our own checkout. It is
+	// what the payment webview compares against to tell "the buyer came back"
+	// from "a page navigated", so changing the payment domain is this one
+	// field rather than a new build.
+	CheckoutHost string `json:"checkout_host,omitempty"`
 }
 
 // MirrorHost is a mirror addressed by IP. Declared here because it travels in

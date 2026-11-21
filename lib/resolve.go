@@ -57,6 +57,11 @@ type Resolver struct {
 	// learned holds inputs taken from the last verified payload, so the next
 	// resolve starts with addresses the operator has actually published.
 	learned *Payload
+	// config is the runtime configuration from the last verified payload.
+	// Persisted with the learned inputs on purpose: a kill switch is worth
+	// least exactly when the things it controls are unreachable, so it must
+	// survive a restart with no network at all.
+	config *Config
 	// learnPath is where learned inputs are persisted between runs.
 	learnPath string
 	// forceRefresh makes Resolve skip the cache fast-path. Set by Refresher.
@@ -147,6 +152,12 @@ func Build(o Options) *Resolver {
 		r.learnPath = o.CachePath + ".registry.json"
 		r.learned = loadLearned(r.learnPath)
 		if r.learned != nil {
+			// The last verified config is restored here, before any resolve.
+			// A kill switch that only applied once the network answered would
+			// be useless in exactly the situation it exists for.
+			if r.learned.Config != nil {
+				r.config = r.learned.Config
+			}
 			r.rebuildLayers(o)
 		}
 	}
@@ -249,6 +260,14 @@ func (r *Resolver) rebuildLayers(o Options) {
 // learn records the registry from a verified payload and persists it, so the
 // next run — even offline — starts with the addresses the operator published.
 func (r *Resolver) learn(p Payload) {
+	// Configuration is kept even when it is the only thing the document
+	// carries: a kill switch has nothing to do with address discovery and must
+	// not depend on the registry fields happening to be present too.
+	if p.Config != nil {
+		r.mu.Lock()
+		r.config = p.Config
+		r.mu.Unlock()
+	}
 	reg := Payload{
 		Version:    p.Version,
 		IssuedAt:   p.IssuedAt,
@@ -261,7 +280,8 @@ func (r *Resolver) learn(p Payload) {
 		AppsScript: p.AppsScript,
 	}
 	if reg.GitHubIPs == nil && reg.GoProxies == nil && reg.Mirrors == nil &&
-		reg.Resolvers == nil && reg.ServerName == "" && reg.AppsScript == "" {
+		reg.Resolvers == nil && reg.ServerName == "" && reg.AppsScript == "" &&
+		p.Config == nil {
 		return
 	}
 	r.learned = &reg
@@ -436,6 +456,15 @@ func (r *Result) fill(env *Envelope, source string, layer int) {
 	r.Layer = layer
 	r.IssuedAt = p.IssuedAt
 	r.ExpiresAt = p.ExpiresAt
+}
+
+// Config returns the runtime configuration from the last verified payload, or
+// nil when none has been seen yet. Callers must treat nil as "keep the
+// compiled-in defaults".
+func (r *Resolver) Config() *Config {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.config
 }
 
 // ProbeSeeds exposes layer zero to callers that want to skip document fetching

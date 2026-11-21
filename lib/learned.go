@@ -25,6 +25,10 @@ type learnedRegistry struct {
 	Resolvers  []string     `json:"resolvers,omitempty"`
 	ServerName string       `json:"server_name,omitempty"`
 	AppsScript string       `json:"apps_script,omitempty"`
+	// Config is persisted with the registry inputs. A kill switch is worth
+	// least exactly when the network it protects against is down, so the last
+	// verified answer must survive a restart with no connectivity at all.
+	Config *Config `json:"config,omitempty"`
 }
 
 func loadLearned(path string) *Payload {
@@ -47,6 +51,7 @@ func loadLearned(path string) *Payload {
 		Resolvers:  lr.Resolvers,
 		ServerName: lr.ServerName,
 		AppsScript: lr.AppsScript,
+		Config:     lr.Config,
 	}
 }
 
@@ -65,6 +70,7 @@ func storeLearned(path string, p Payload) {
 		Resolvers:  p.Resolvers,
 		ServerName: p.ServerName,
 		AppsScript: p.AppsScript,
+		Config:     p.Config,
 	}, "", "  ")
 	if err != nil {
 		return
