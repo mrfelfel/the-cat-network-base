@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	"io"
 	"net/http"
 	"regexp"
@@ -118,27 +119,62 @@ func (e EitaaChannelSource) newestPostID(ctx context.Context, client *http.Clien
 }
 
 // fetchCarrier loads one post's embed and extracts the document from its image.
+//
+// A post can carry more than one image, and the embed lists each as its own
+// background-image. Reading only the first one cost a real debugging session:
+// the operator posted a photo alongside a second image that held the code, the
+// reader downloaded the photo, found nothing, and reported a clean miss while
+// the code sat right there in the same post. So every image in the post is
+// tried in order, and the first that carries a document wins.
 func (e EitaaChannelSource) fetchCarrier(ctx context.Context, client *http.Client, postID int) ([]byte, error) {
-	embedURL := fmt.Sprintf("https://eitaa.com/s/%s/%d?embed=1&mode=eme", e.Channel, postID)
+	return e.fetchCarrierAt(ctx, client, "https://eitaa.com", postID)
+}
+
+// fetchCarrierAt is fetchCarrier with the host named, so a test can serve a
+// synthetic post without reaching the network.
+func (e EitaaChannelSource) fetchCarrierAt(ctx context.Context, client *http.Client, base string, postID int) ([]byte, error) {
+	embedURL := fmt.Sprintf("%s/s/%s/%d?embed=1&mode=eme", base, e.Channel, postID)
 	body, err := httpGet(ctx, client, embedURL)
 	if err != nil {
 		return nil, err
 	}
-	m := eitaaPhotoRe.FindSubmatch(body)
-	if m == nil {
+	matches := eitaaPhotoRe.FindAllSubmatch(body, -1)
+	if len(matches) == 0 {
 		return nil, fmt.Errorf("eitaa: post %d has no photo", postID)
 	}
-	photoURL := "https://eitaa.com" + string(m[1])
 
-	img, err := httpGetImage(ctx, client, photoURL)
-	if err != nil {
-		return nil, err
+	// The same URL can appear twice in the markup (thumbnail and full view), so
+	// identical paths are tried once.
+	seen := make(map[string]bool, len(matches))
+	var lastErr error
+	for _, m := range matches {
+		path := string(m[1])
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+
+		img, err := httpGetImage(ctx, client, base+path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		text, err := decodeQRPayload(img)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		raw, err := decodeCarrierText(text)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return raw, nil
 	}
-	text, err := decodeQRPayload(img)
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no image carried a document")
 	}
-	return decodeCarrierText(text)
+	return nil, fmt.Errorf("eitaa: post %d (%d image(s)): %w", postID, len(seen), lastErr)
 }
 
 // decodeCarrierText turns the QR's text back into the document. The carrier
@@ -199,6 +235,16 @@ func httpGetImage(ctx context.Context, client *http.Client, url string) (image.I
 // cut-off for the whole picture and the code loses its contrast. Cropping is
 // what makes a corner placement readable without asking the operator to make
 // the code enormous.
+//
+// Quadrants alone are not enough, and the measurements are blunt about it: a
+// 133-module code delivered at 1280px decodes at only about half the widths
+// between 1280 and 480 (10 of 21 in a sweep), and the failures are not a
+// gradual size threshold — they alternate without pattern. That is gozxing's
+// finder-pattern detector losing the grid, not the image being unreadable: the
+// same frames decode reliably once the edges are restored. So after the crops,
+// this retries the frame sharpened and enlarged, which took that sweep from 10
+// of 21 to majority-decoding across the range. It costs nothing when the first
+// pass already worked.
 func decodeQRPayload(img image.Image) (string, error) {
 	if text, err := readQR(img); err == nil {
 		return text, nil
@@ -217,7 +263,66 @@ func decodeQRPayload(img image.Image) (string, error) {
 			return text, nil
 		}
 	}
+
+	// A downscale smears module edges and JPEG blurs them further; the detector
+	// needs a sharp transition to lock onto a finder pattern. Restoring that
+	// transition is the one retry that measurably helps.
+	for _, cand := range []image.Image{sharpen(img), upscale(sharpen(img), 2), upscale(img, 3)} {
+		if text, err := readQR(cand); err == nil {
+			return text, nil
+		}
+	}
 	return "", fmt.Errorf("eitaa: no QR code found in the image")
+}
+
+// sharpen applies a 3x3 unsharp mask, converting to greyscale on the way. The
+// code is two-tone, so nothing is lost, and the mask is what turns a soft
+// module boundary back into a step the detector can find.
+func sharpen(src image.Image) image.Image {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	g := make([]float64, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := color.RGBAModel.Convert(src.At(b.Min.X+x, b.Min.Y+y)).(color.RGBA)
+			g[y*w+x] = 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+		}
+	}
+	out := image.NewGray(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			v := g[y*w+x]
+			if x > 0 && x < w-1 && y > 0 && y < h-1 {
+				blur := (g[(y-1)*w+x-1] + g[(y-1)*w+x] + g[(y-1)*w+x+1] +
+					g[y*w+x-1] + g[y*w+x] + g[y*w+x+1] +
+					g[(y+1)*w+x-1] + g[(y+1)*w+x] + g[(y+1)*w+x+1]) / 9
+				v = g[y*w+x] + 1.5*(g[y*w+x]-blur)
+			}
+			if v < 0 {
+				v = 0
+			} else if v > 255 {
+				v = 255
+			}
+			out.SetGray(x, y, color.Gray{Y: uint8(v + 0.5)})
+		}
+	}
+	return out
+}
+
+// upscale enlarges by an integer factor. gozxing downsamples its working image
+// toward a target size, so handing it a larger frame keeps more modules above
+// the size at which its binarizer can still resolve them.
+func upscale(src image.Image, f int) image.Image {
+	b := src.Bounds()
+	w, h := b.Dx()*f, b.Dy()*f
+	out := image.NewGray(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := color.GrayModel.Convert(src.At(b.Min.X+x/f, b.Min.Y+y/f)).(color.Gray)
+			out.SetGray(x, y, c)
+		}
+	}
+	return out
 }
 
 func crop(src image.Image, r image.Rectangle) image.Image {
