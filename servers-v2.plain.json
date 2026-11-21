@@ -41,6 +41,7 @@
   "apps_script": "",
   "config": {
     "payments": {
+      "mode": "config",
       "direct_enabled": true,
       "builds": {
         "play": true,

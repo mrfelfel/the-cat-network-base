@@ -76,7 +76,22 @@ type Config struct {
 // here rather than only in help.getAppConfig, which is unreachable when the
 // server itself is what is down.
 type PaymentsConfig struct {
-	// DirectEnabled is the master switch. Absent means "unchanged".
+	// Mode decides where the answer comes from, which matters when the two
+	// sources can disagree:
+	//
+	//	"server"  — defer entirely to the server's own answer. The document
+	//	            imposes nothing, so a server that has not blocked payments
+	//	            allows them. This is the default when mode is absent.
+	//	"config"  — the document is the only authority. A server saying yes
+	//	            cannot enable payments the document disables, and a server
+	//	            saying no is honoured because it is the last word anyway.
+	//	"off"     — payments are off everywhere, regardless of the server.
+	//
+	// "config" is what an operator wants for a hard kill switch; "server" is
+	// what keeps the pre-existing behaviour for anyone who never touches it.
+	Mode_ string `json:"mode,omitempty"`
+	// DirectEnabled is the master switch, used when Mode is "config".
+	// Absent means "unchanged".
 	DirectEnabled *bool `json:"direct_enabled,omitempty"`
 	// Builds overrides the switch per distribution, keyed "play",
 	// "standalone", "bazaar". A build not named here follows DirectEnabled.
@@ -273,3 +288,72 @@ func newTrimReader(b []byte) io.Reader {
 }
 
 func (t *trimReader) Read(p []byte) (int, error) { return t.r.Read(p) }
+
+
+// PaymentsEnabled resolves the document's payment switch for one build.
+//
+// The rules live here, next to the document they interpret, so a change to the
+// precedence needs no client release — only the app's own floor remains in the
+// app.
+func (p *Payload) PaymentsEnabled(build string) bool {
+	if p == nil {
+		return true
+	}
+	return PaymentsEnabled(p.Config, build)
+}
+
+// PaymentsEnabled applies the rules to a Config that may be nil (no document
+// seen yet), which must read as "the document imposes nothing".
+func PaymentsEnabled(c *Config, build string) bool {
+	if c == nil || c.Payments == nil {
+		return true
+	}
+	cfg := c.Payments
+	switch cfg.Mode() {
+	case ModeOff:
+		return false
+	case ModeServer:
+		// The document defers to the server; it imposes nothing itself.
+		return true
+	}
+	if cfg.Builds != nil {
+		if v, ok := cfg.Builds[build]; ok {
+			return v
+		}
+		if cfg.DirectEnabled == nil {
+			// The operator enumerated builds and this one was not among them.
+			return false
+		}
+	}
+	if cfg.DirectEnabled != nil {
+		return *cfg.DirectEnabled
+	}
+	return true
+}
+
+// Payment modes. Expressed as constants so an app and the document cannot drift
+// on the spelling.
+const (
+	// ModeServer defers to the server's own answer: the document imposes
+	// nothing. The default, and what every pre-existing client assumed.
+	ModeServer = "server"
+	// ModeConfig makes the document the only authority.
+	ModeConfig = "config"
+	// ModeOff disables payments everywhere, regardless of the server.
+	ModeOff = "off"
+)
+
+// Mode reports which authority this block claims, with an unrecognised value
+// resolved to ModeOff. A typo must never be read as permission: falling back to
+// ModeServer would honour whatever the server allows, which for a misspelled
+// "off" is the exact opposite of the intent.
+func (p *PaymentsConfig) Mode() string {
+	switch p.Mode_ {
+	case ModeConfig, ModeOff:
+		return p.Mode_
+	case ModeServer, "":
+		return ModeServer
+	default:
+		return ModeOff
+	}
+}

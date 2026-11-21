@@ -40,6 +40,8 @@ func main() {
 		err = cmdResolve(os.Args[2:])
 	case "txt":
 		err = cmdTXT(os.Args[2:])
+	case "layers":
+		err = cmdLayers(os.Args[2:])
 	case "sources":
 		fs := flag.NewFlagSet("sources", flag.ExitOnError)
 		rf := bindResolverFlags(fs)
@@ -70,6 +72,7 @@ commands:
   resolve  -repo owner/name [-seeds ip:port,ip:port]
   sources  -repo owner/name
   txt      servers.json -record _gameserver.example
+  layers   -repo owner/name [-block static,dns,udp-dns,goproxy] [-file servers-v2.json]
 `)
 }
 

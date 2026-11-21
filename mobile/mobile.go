@@ -132,24 +132,19 @@ func (c *Client) ConfigJSON(build string) string {
 // carries a Builds map and the build is absent from it, the operator was
 // enumerating exceptions and did not include this one.
 func (c *Client) PaymentsEnabled(build string) bool {
+	return catnet.PaymentsEnabled(c.r.Config(), build)
+}
+
+// PaymentMode reports which authority the document claims over payments:
+// "server", "config" or "off". The app needs this separately from the boolean
+// because the two sources can disagree, and "the document says nothing" is not
+// the same answer as "the document says yes".
+func (c *Client) PaymentMode() string {
 	cfg := c.r.Config()
 	if cfg == nil || cfg.Payments == nil {
-		return true
+		return catnet.ModeServer
 	}
-	p := cfg.Payments
-	if p.Builds != nil {
-		if v, ok := p.Builds[build]; ok {
-			return v
-		}
-		if p.DirectEnabled == nil {
-			// The operator enumerated builds and this one was not among them.
-			return false
-		}
-	}
-	if p.DirectEnabled != nil {
-		return *p.DirectEnabled
-	}
-	return true
+	return cfg.Payments.Mode()
 }
 
 // FirstAddr is the convenience call most apps want: just the preferred
